@@ -123,12 +123,16 @@ public class ParticleSystemConverter : ResoniteComponentConverter<UnityEngine.Pa
         switch (main.simulationSpace)
         {
             case ParticleSystemSimulationSpace.Local:
+                system.SimulationSpace.UseParentSpace = true;
                 system.SimulationSpace.LocalSpace = target.transform.GetSlot();
                 break;
 
             case ParticleSystemSimulationSpace.Custom:
                 if (main.customSimulationSpace != null)
+                {
+                    system.SimulationSpace.UseParentSpace = true;
                     system.SimulationSpace.LocalSpace = main.customSimulationSpace.GetSlot();
+                }
                 break;
 
             // World: leave Default = WorldRoot
