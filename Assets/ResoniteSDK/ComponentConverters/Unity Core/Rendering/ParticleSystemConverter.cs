@@ -7,7 +7,10 @@ public static class EmitterHelper
         FrooxEngine.PhotonDust.ParticleSystem system,
         UnityEngine.ParticleSystem.ShapeModule shape, UnityEngine.ParticleSystem.EmissionModule emission)
     {
-        emitter.Enabled = shape.enabled;
+        // emitter.Enabled gates whether the system emits particles at all — that's
+        // EmissionModule.enabled in Unity, not ShapeModule.enabled (which only affects
+        // emission position/direction; a disabled shape still emits from a point).
+        emitter.Enabled = emission.enabled;
         emitter.System = system;
 
         // TODO!!! Handle other styles?
@@ -25,6 +28,11 @@ public class ParticleSystemConverter : ResoniteComponentConverter<UnityEngine.Pa
     public SizeRangeInitializerWrapper SizeRangeInitializer;
     public ColorRangeInitializerWrapper ColorRangeInitializer;
     public SpeedRangeInitializerWrapper SpeedRangeInitializer;
+
+    // Optional "over lifetime" modules — only present when Unity's matching module is enabled
+    public ColorOverLifetimeStartEndWrapper ColorOverLifetime;
+    public SizeOverLifetimeStartEndWrapper SizeOverLifetime;
+    public TextureSheetAnimatorWrapper TextureSheetAnimator;
 
     public BillboardParticleRendererWrapper BillboardRenderer;
     public MeshParticleRendererWrapper MeshRenderer;
@@ -46,6 +54,26 @@ public class ParticleSystemConverter : ResoniteComponentConverter<UnityEngine.Pa
         var style = ParticleStyle.Data;
 
         return EnsureComponent<TModule, TWrapper>(ref wrapper, module => style.Modules.Add(module));
+    }
+
+    // Like EnsureModule, but for modules that only exist when the corresponding Unity
+    // module is enabled — removes the module when it's been switched off. Returns null
+    // (the module was removed / never created) when disabled.
+    TModule EnsureOptionalModule<TModule, TWrapper>(ref TWrapper wrapper, bool enabled)
+        where TWrapper : ResoniteComponent<TModule>
+        where TModule : ResoniteObject, IParticleSystemSubsystem, FrooxEngine.IWorldElement, new()
+    {
+        if (!enabled)
+        {
+            if (wrapper != null)
+            {
+                DestroyImmediate(wrapper);
+                wrapper = null;
+            }
+            return null;
+        }
+
+        return EnsureModule<TModule, TWrapper>(ref wrapper);
     }
 
     TEmitter EnsureEmitter<TEmitter, TWrapper>(ref TWrapper wrapper)
@@ -156,6 +184,50 @@ public class ParticleSystemConverter : ResoniteComponentConverter<UnityEngine.Pa
                 color.MinValue = main.startColor.colorMin.ToColorX_sRGB();
                 color.MaxValue = main.startColor.colorMax.ToColorX_sRGB();
                 break;
+        }
+
+        // Color over lifetime. PhotonDust's StartEnd variant only samples two points, so we
+        // evaluate Unity's gradient (which merges separate color/alpha key arrays) at t=0 and t=1 —
+        // this doesn't preserve interior gradient stops, but is a large improvement over a flat color.
+        var colorOverLifetime = target.colorOverLifetime;
+        var colorOverLifetimeModule = EnsureOptionalModule<ColorOverLifetimeStartEnd, ColorOverLifetimeStartEndWrapper>(
+            ref ColorOverLifetime, colorOverLifetime.enabled);
+
+        if (colorOverLifetimeModule != null && colorOverLifetime.color.mode == ParticleSystemGradientMode.Gradient)
+        {
+            var gradient = colorOverLifetime.color.gradient;
+            colorOverLifetimeModule.StartColor = gradient.Evaluate(0f).ToColorX_sRGB();
+            colorOverLifetimeModule.EndColor = gradient.Evaluate(1f).ToColorX_sRGB();
+        }
+
+        // Size over lifetime. Unity's curve is a *multiplier* on the particle's start size,
+        // not an absolute value — bake the base size in so PhotonDust's absolute StartSize/EndSize
+        // match what Unity would actually render.
+        var sizeOverLifetime = target.sizeOverLifetime;
+        var sizeOverLifetimeModule = EnsureOptionalModule<SizeOverLifetimeStartEnd, SizeOverLifetimeStartEndWrapper>(
+            ref SizeOverLifetime, sizeOverLifetime.enabled);
+
+        if (sizeOverLifetimeModule != null && sizeOverLifetime.size.mode == ParticleSystemCurveMode.Curve)
+        {
+            var curve = sizeOverLifetime.size.curve;
+            var baseSize = size.MaxValue; // already resolved above (constant or TwoConstants max)
+            sizeOverLifetimeModule.StartSize = baseSize * curve.Evaluate(0f);
+            sizeOverLifetimeModule.EndSize = baseSize * curve.Evaluate(1f);
+        }
+
+        // Texture sheet animation (flipbook). Fire/smoke effects commonly animate through a
+        // grid of frames on the same texture instead of using a single static image.
+        var textureSheetAnimation = target.textureSheetAnimation;
+        var textureSheetAnimationModule = EnsureOptionalModule<TextureSheetAnimator, TextureSheetAnimatorWrapper>(
+            ref TextureSheetAnimator, textureSheetAnimation.enabled);
+
+        if (textureSheetAnimationModule != null)
+        {
+            textureSheetAnimationModule.TileGridSize = new Vector2Int(textureSheetAnimation.numTilesX, textureSheetAnimation.numTilesY);
+            textureSheetAnimationModule.AnimationCycleCount = textureSheetAnimation.cycleCount;
+            textureSheetAnimationModule.AnimationType = textureSheetAnimation.animation == UnityEngine.ParticleSystemAnimationType.WholeSheet
+                ? PhotonDust.TextureSheetAnimationType.WholeSheet
+                : PhotonDust.TextureSheetAnimationType.SingleRow;
         }
 
         switch (renderer.renderMode)
