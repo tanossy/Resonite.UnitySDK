@@ -270,7 +270,13 @@ public class ParticleSystemConverter : ResoniteComponentConverter<UnityEngine.Pa
                 sphere.Radius = shape.radius;
                 break;
 
+            // BoxShell/BoxEdge weren't previously matched by this switch at all (silently no
+            // emitter created for assets using them) — the EmitFromShell line below already
+            // assumed it could see BoxShell, but that was unreachable dead code since the case
+            // label above only matched plain Box. Same bug class as Cone (see above).
             case ParticleSystemShapeType.Box:
+            case ParticleSystemShapeType.BoxShell:
+            case ParticleSystemShapeType.BoxEdge:
                 var box = EnsureEmitter<BoxEmitter, BoxEmitterWrapper>(ref BoxEmitter);
 
                 box.SetFrom(system, shape, emission);
