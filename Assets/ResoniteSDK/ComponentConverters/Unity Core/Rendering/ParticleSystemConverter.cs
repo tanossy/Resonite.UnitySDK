@@ -118,25 +118,14 @@ public class ParticleSystemConverter : ResoniteComponentConverter<UnityEngine.Pa
         system.MaxParticleCount = main.maxParticles;
         system.Style = style;
 
-        // Simulation space. PhotonDust defaults to WorldRoot, which detaches particles
-        // from the emitter's transform — Unity's default is Local, so map it explicitly.
-        switch (main.simulationSpace)
-        {
-            case ParticleSystemSimulationSpace.Local:
-                system.SimulationSpace.UseParentSpace = true;
-                system.SimulationSpace.LocalSpace = target.transform.GetSlot();
-                break;
-
-            case ParticleSystemSimulationSpace.Custom:
-                if (main.customSimulationSpace != null)
-                {
-                    system.SimulationSpace.UseParentSpace = true;
-                    system.SimulationSpace.LocalSpace = main.customSimulationSpace.GetSlot();
-                }
-                break;
-
-            // World: leave Default = WorldRoot
-        }
+        // NOTE: SimulationSpace intentionally left untouched (Default = WorldRoot).
+        // Emission position comes from the emitter's resolved world transform via normal
+        // slot parenting, independent of this setting — two known-good native Resonite
+        // fire assets (checked live: "Base Scene/VFX/Particles" and root "PhotonDust Fire")
+        // both render correctly with SimulationSpace at its untouched WorldRoot default.
+        // An earlier attempt to set LocalSpace/UseParentSpace here made the fire disappear
+        // entirely (verified: reverted). If a real per-emitter simulation-space need turns
+        // up later, re-derive it from a working example instead of guessing again.
 
         // Lifetime
         switch (main.startLifetime.mode)
