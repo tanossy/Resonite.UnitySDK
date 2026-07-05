@@ -298,13 +298,35 @@ public class ParticleSystemConverter : ResoniteComponentConverter<UnityEngine.Pa
                 circle.Scale = Vector2.one;
                 break;
 
+            // Unity has 4 distinct Cone variants (verified via ps.shape.shapeType, raw enum
+            // values Cone=4/ConeShell=7/ConeVolume=8/ConeVolumeShell=9). Only the two "Volume"
+            // variants actually spawn particles distributed along the cone's length; plain
+            // Cone/ConeShell emit from the flat base disc only, and `length` there merely
+            // shapes the velocity spread (the base is treated as if `length` units in front of
+            // an implicit apex — narrower length = wider effective spread for the same angle).
+            // Previously `Height` was set to `shape.length` unconditionally, which for a plain
+            // Cone (this asset's actual type) turned a point-like base emission into particles
+            // scattered across a `length`-meter-tall volume (a real Unity asset had length=5,
+            // i.e. a 5-METER spawn volume for a candle flame) — this was the root cause of the
+            // original "particles stretched across the room" bug, confirmed against
+            // wiki.resonite.com/Component:ConeEmitter ("Height = 放出元のconeの高さ", i.e. Height
+            // is literally the emission volume's height, not a Unity-length passthrough).
             case ParticleSystemShapeType.Cone:
+            case ParticleSystemShapeType.ConeShell:
+            case ParticleSystemShapeType.ConeVolume:
+            case ParticleSystemShapeType.ConeVolumeShell:
                 var cone = EnsureEmitter<ConeEmitter, ConeEmitterWrapper>(ref ConeEmitter);
 
                 cone.SetFrom(system, shape, emission);
 
                 cone.BaseRadius = shape.radius;
-                cone.Height = shape.length;
+
+                bool isVolumeCone = shape.shapeType == ParticleSystemShapeType.ConeVolume
+                    || shape.shapeType == ParticleSystemShapeType.ConeVolumeShell;
+                cone.Height = isVolumeCone ? shape.length : 0f;
+
+                cone.EmitFromShell = shape.shapeType == ParticleSystemShapeType.ConeShell
+                    || shape.shapeType == ParticleSystemShapeType.ConeVolumeShell;
                 break;
 
             case ParticleSystemShapeType.Mesh:
