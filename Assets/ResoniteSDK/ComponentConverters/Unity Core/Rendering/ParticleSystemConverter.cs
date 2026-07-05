@@ -90,6 +90,22 @@ public class ParticleSystemConverter : ResoniteComponentConverter<UnityEngine.Pa
         system.MaxParticleCount = main.maxParticles;
         system.Style = style;
 
+        // Simulation space. PhotonDust defaults to WorldRoot, which detaches particles
+        // from the emitter's transform — Unity's default is Local, so map it explicitly.
+        switch (main.simulationSpace)
+        {
+            case ParticleSystemSimulationSpace.Local:
+                system.SimulationSpace.LocalSpace = target.transform.GetSlot();
+                break;
+
+            case ParticleSystemSimulationSpace.Custom:
+                if (main.customSimulationSpace != null)
+                    system.SimulationSpace.LocalSpace = main.customSimulationSpace.GetSlot();
+                break;
+
+            // World: leave Default = WorldRoot
+        }
+
         // Lifetime
         switch (main.startLifetime.mode)
         {
