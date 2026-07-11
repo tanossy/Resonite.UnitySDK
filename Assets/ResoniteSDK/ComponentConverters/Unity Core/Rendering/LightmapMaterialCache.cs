@@ -79,9 +79,45 @@ using UnityEngine;
 //    scene GUID that has ever existed, which isn't something we can enumerate reliably) - use the
 //    "Resonite SDK/Clear Generated Lightmap Variants" menu item below to nuke the entire generated
 //    folder on demand; every entry in it is fully reproducible by re-running the scene conversion.
+//  - 2026-07-11 (ダイダロス): GetVariantOrOriginalInner now has an additional branch, taken only
+//    when the renderer's lightmap slot was baked with a directional lightmapper
+//    (LightmapData.lightmapDir != null), that substitutes a per-renderer combined texture from
+//    DirectionalLightmapBaker in place of the plain shared-atlas decode - see that branch's own
+//    inline comment and DirectionalLightmapBaker.cs's header comment for the full design. A
+//    non-directional bake (lightmapDir == null, i.e. everything before this date) takes none of
+//    that code and is unaffected.
 public static class LightmapMaterialCache
 {
     const string BakedLightmapShaderName = "ResoniteSDK/BakedLightmapStandard";
+
+    // Shaders whose Unity-side property block is a verified, property-for-property match with
+    // Unity's built-in Standard shader for every field this file reads below (_Color, _MainTex
+    // +Scale/Offset, _Metallic, _Glossiness, _MetallicGlossMap, _BumpMap, _BumpScale,
+    // _OcclusionMap, _EmissionMap, _EmissionColor, _Cutoff, _Mode, and the _EMISSION keyword) —
+    // so the exact same read/copy code below produces correct results for them too, without any
+    // separate conversion path. Verified against source, not assumed:
+    //   "Silent/Filamented" - Assets/sameR&D/Shader/Filamented_1.2/filamented-master/Filamented/
+    //     Standard.shader (2026-07-12): Properties block declares every field above under the
+    //     identical name, including `_pragma shader_feature _EMISSION` matching Standard's own
+    //     keyword convention.
+    //   "Standard_Culloff" - Assets/sameR&D/Shader/Standard_Culloff.shader (2026-07-12): same
+    //     verification, same result (double-sided/cull-off variant of Standard with an otherwise
+    //     identical property block).
+    // Do NOT add a shader here on assumption alone - a mismatched property name would silently
+    // read/write the wrong value (e.g. GetFloat on a missing property returns 0, which is
+    // indistinguishable from a legitimately-set 0). Confirm against the shader's actual
+    // Properties block first.
+    // public (not private/internal): this file has no "Editor" folder in its path, so it compiles
+    // into Assembly-CSharp, while LightmapTestHarness.cs (under Assets/Editor/) compiles into the
+    // separate Assembly-CSharp-Editor — `internal` only grants same-assembly visibility, which
+    // does NOT cross that boundary (confirmed via a real CS0117 here), so this must be public for
+    // shader_survey's "eligible" label to read the real list instead of duplicating it.
+    public static readonly HashSet<string> StandardCompatibleShaderNames = new HashSet<string>
+    {
+        "Standard",
+        "Silent/Filamented",
+        "Standard_Culloff",
+    };
 
     // Session-scoped memory front-cache for lightmap-variant Material assets, keyed by asset path.
     // See the class-level comment above (指摘2) for the "AssetDatabase is still the source of
@@ -170,7 +206,7 @@ public static class LightmapMaterialCache
         if (lightmapData.lightmapColor == null)
             return source;
 
-        if (source.shader == null || source.shader.name != "Standard")
+        if (source.shader == null || !StandardCompatibleShaderNames.Contains(source.shader.name))
             return source;
 
         // Guard the _Mode read below - some Standard-named shader variants/older serialized
@@ -233,6 +269,46 @@ public static class LightmapMaterialCache
         // Decode (or reuse the already-decoded, hash-checked) baked lightmap texture for this
         // scene/index pair. See LightmapDecoder for the decode + persistence logic.
         var bakedLightmapTex = LightmapDecoder.GetDecodedLightmap(sceneGuid, lightmapIndex, lightmapData.lightmapColor);
+        var bakedLightmapST = lightmapScaleOffset;
+
+        // --- ダイダロス追加: 「法線を焼き込む」実験的パス（2026-07-11） --------------------
+        // Only taken when THIS lightmap slot was actually baked with a directional lightmapper
+        // (lightmapData.lightmapDir != null - Unity only ever populates lightmapDir when
+        // LightingSettings.directionalityMode was CombinedDirectional at bake time). Deliberately
+        // gated on the baked DATA itself rather than a flag threaded in from the calling
+        // project: this file has no reachable reference back to whatever harness/window
+        // requested the bake (SendCurrentScene()/SceneConverter call this converter with no such
+        // context), and gating on lightmapDir's actual presence means the OFF path
+        // (lightmapDir == null, i.e. today's NonDirectional bake, unchanged by this whole
+        // feature) is byte-for-byte identical to before this block existed - bakedLightmapTex/
+        // bakedLightmapST above are only ever overwritten when the branch below both triggers
+        // AND succeeds.
+        //
+        // Resonite/Renderite has no directional-lightmap material input (no "dominant
+        // direction" slot anywhere in this SDK's material graph, and the class comment above
+        // already establishes why a custom shader isn't an option) - see
+        // DirectionalLightmapBaker's own header comment for the full approximation this
+        // performs (per-renderer geometry-normal patch × UnityCG.cginc's own
+        // DecodeDirectionalLightmap() formula, baked once into a static combined color texture
+        // at Editor conversion time).
+        if (lightmapData.lightmapDir != null)
+        {
+            var normalBaked = DirectionalLightmapBaker.GetNormalBakedLightmap(renderer, sceneGuid, lightmapIndex, lightmapData, lightmapScaleOffset);
+
+            if (normalBaked != null)
+            {
+                // normalBaked is already cropped 1:1 to exactly this renderer's own lightmap
+                // tile (see DirectionalLightmapBaker.GetNormalBakedLightmapInner) - it needs no
+                // further scale/offset, unlike the shared whole-atlas bakedLightmapTex above.
+                bakedLightmapTex = normalBaked;
+                bakedLightmapST = new Vector4(1f, 1f, 0f, 0f);
+            }
+            // else: DirectionalLightmapBaker already Debug.LogWarning'd the specific reason
+            // (missing UV2 channel, missing internal shader, etc.) and returned null - fall
+            // back to the plain atlas-wide decode already computed above, exactly as if this
+            // renderer's lightmap had been baked non-directional.
+        }
+        // ------------------------------------------------------------------------------------
 
         // Every property below is re-read from source and (re-)written on *every* call, even
         // when the variant asset already existed - only whether anything actually changed is
@@ -278,7 +354,7 @@ public static class LightmapMaterialCache
         }
 
         changed |= SetTextureIfChanged(variant, "_BakedLightmap", bakedLightmapTex);
-        changed |= SetVectorIfChanged(variant, "_BakedLightmapST", lightmapScaleOffset);
+        changed |= SetVectorIfChanged(variant, "_BakedLightmapST", bakedLightmapST);
 
         if (changed)
             EditorUtility.SetDirty(variant);
