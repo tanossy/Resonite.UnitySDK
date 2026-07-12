@@ -62,6 +62,41 @@ using UnityEngine;
 //  that case so results can be spot-checked manually; if in doubt, set the preset to `User` in
 //  the Inspector before conversion to guarantee the manual fields are what gets read.
 //
+//  RESONITE-SIDE PRESET INVESTIGATION (2026-07-13, `feature/water-and-audio-presets`):
+//  Resonite's AudioZitaReverb exposes 25 "PresetXxx" members including `PresetUnderwater`
+//  (matching Unity's `AudioReverbPreset.Underwater`), but every single one of them is a
+//  runtime RPC METHOD, not a field. Confirmed two independent ways:
+//   1. The checked-in generated binding (BindingsGenerator/.../Generated/Audio/FrooxEngine/
+//      AudioZitaReverbWrapper.cs), itself produced from a live ResoniteLink session against
+//      Resonite 2026.3.5.946, declares each preset as
+//      `public async Task PresetUnderwater(IConversionContext context)` that builds a
+//      `ResoniteLink.CallSyncMethod { MethodName = "PresetUnderwater" }` and awaits
+//      `context.CallMethod(...)` - i.e. it fires a synced RPC on a live, already-spawned
+//      object, and requires a connected session/TargetID.
+//   2. `ilspycmd -t FrooxEngine.AudioZitaReverb` against the shipped
+//      Assets/ResoniteSDK/Plugins/Resonite.UnitySDK.Bindings.dll independently decompiles to
+//      the exact same shape: only 11 float Sync fields exist on the type at all (InDelay,
+//      Crossover, RT60Low, RT60Mid, HighFrequencyDamping, EQ1Frequency, EQ1Level,
+//      EQ2Frequency, EQ2Level, Mix, Level - the same 11 already used by SetFrom() above); no
+//      enum/int/string field selecting a preset exists anywhere on the type.
+//  Conclusion: Resonite's PresetUnderwater (and all other AudioZitaReverb presets) CANNOT be
+//  applied statically at Editor conversion time - there is nothing to set on the component
+//  data before the object is ever synced to a running Resonite session. This is a hard
+//  platform limitation, not a gap in this converter; no field-based shortcut exists to wire
+//  up here. (For what it's worth, if a future Resonite version adds a preset selector field,
+//  the correct place to apply it would be right here in SetFrom(), gated on
+//  `unityReverb.reverbPreset == AudioReverbPreset.Underwater`.)
+//  As the next-best thing, Unity's own Underwater preset values were checked against the
+//  existing numeric mapping below and flow through it without any special-casing needed:
+//  decayTime=1.49 / decayHFRatio=0.1 -> RT60Low=1.49s, RT60Mid=0.149s (a short, heavily
+//  damped high-frequency tail, consistent with the "muffled" underwater sound); room=-1000mB /
+//  reverbLevel=1700mB -> Level=(-1000+1700)/100=+7dB (a notably loud wet signal, again
+//  consistent with Underwater's characteristically dense reverb). Every formula involved
+//  (Mathf.Pow, division, Mathf.Clamp01/Mathf.Max) is well-defined for these inputs, so no
+//  divide-by-zero/NaN/exception risk exists either. This is a hand-checked arithmetic
+//  sanity-check only, not an in-client audible verification (see UNCONFIRMED notes above and
+//  in the class-level summary).
+//
 // ============================================================================================
 
 public static class AudioEffectHelper
