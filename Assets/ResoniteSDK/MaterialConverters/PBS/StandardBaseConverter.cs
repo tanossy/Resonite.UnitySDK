@@ -8,6 +8,30 @@ public abstract class StandardBaseConverter<TWrapper, TMaterial> : ResoniteMater
 {
     public TWrapper PBS;
 
+    protected static float GetFloatOrDefault(UnityEngine.Material material, string property, float fallback = 0f)
+    {
+        if (material == null || !material.HasProperty(property))
+            return fallback;
+
+        return material.GetFloat(property);
+    }
+
+    protected static Color GetColorOrDefault(UnityEngine.Material material, string property, Color fallback)
+    {
+        if (material == null || !material.HasProperty(property))
+            return fallback;
+
+        return material.GetColor(property);
+    }
+
+    protected static Texture GetTextureOrDefault(UnityEngine.Material material, string property)
+    {
+        if (material == null || !material.HasProperty(property))
+            return null;
+
+        return material.GetTexture(property);
+    }
+
     protected static readonly IEnumerable<string> BaseSupportedProperties = new List<string>()
     {
         "_Cutoff",
@@ -43,25 +67,25 @@ public abstract class StandardBaseConverter<TWrapper, TMaterial> : ResoniteMater
         else
             data.BlendMode = BlendMode.Opaque;
 
-        data.AlphaCutoff = material.GetFloat("_Cutoff");
+        data.AlphaCutoff = GetFloatOrDefault(material, "_Cutoff");
 
-        data.AlbedoColor = material.GetColor("_Color").ToColorX_sRGB();
+        data.AlbedoColor = GetColorOrDefault(material, "_Color", Color.white).ToColorX_sRGB();
         data.AlbedoTexture = context.GetITexture2D(material.mainTexture);
         data.TextureScale = material.mainTextureScale;
         data.TextureOffset = material.mainTextureOffset;
 
-        data.NormalMap = context.GetITexture2D(material.GetTexture("_BumpMap"));
-        data.NormalScale = material.GetFloat("_BumpScale");
+        data.NormalMap = context.GetITexture2D(GetTextureOrDefault(material, "_BumpMap"));
+        data.NormalScale = GetFloatOrDefault(material, "_BumpScale", 1f);
 
-        data.HeightScale = material.GetFloat("_Parallax");
-        data.HeightMap = context.GetITexture2D(material.GetTexture("_ParallaxMap"));
+        data.HeightScale = GetFloatOrDefault(material, "_Parallax");
+        data.HeightMap = context.GetITexture2D(GetTextureOrDefault(material, "_ParallaxMap"));
 
-        data.OcclusionMap = context.GetITexture2D(material.GetTexture("_OcclusionMap"));
+        data.OcclusionMap = context.GetITexture2D(GetTextureOrDefault(material, "_OcclusionMap"));
 
         if (material.IsKeywordEnabled("_EMISSION"))
         {
-            data.EmissiveColor = material.GetColor("_EmissionColor").ToColorX_sRGB();
-            data.EmissiveMap = context.GetITexture2D(material.GetTexture("_EmissionMap"));
+            data.EmissiveColor = GetColorOrDefault(material, "_EmissionColor", Color.black).ToColorX_sRGB();
+            data.EmissiveMap = context.GetITexture2D(GetTextureOrDefault(material, "_EmissionMap"));
         }
         else
         {

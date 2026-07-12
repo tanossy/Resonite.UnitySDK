@@ -112,13 +112,14 @@ public class Texture2DConverter : AssetConverter<StaticTexture2DWrapper, StaticT
 
     public static ResoniteLink.Message ConvertTexture2D(UnityEngine.Texture2D texture, bool requiresPostProcessing)
     {
+        var assetPath = AssetDatabase.GetAssetPath(texture);
+        bool isGeneratedLightmapPreview = IsGeneratedLightmapPreview(assetPath);
+
         // We can only import the file directly if there's no postprocessing required
-        if (!requiresPostProcessing)
+        if (!requiresPostProcessing && !isGeneratedLightmapPreview)
         {
             // First try to import it as a file. This is easiest and will preserve most data
             // Rather than just extracting the raw pixels
-            var assetPath = AssetDatabase.GetAssetPath(texture);
-
             if (!string.IsNullOrWhiteSpace(assetPath))
             {
                 assetPath = Path.GetFullPath(assetPath);
@@ -126,6 +127,10 @@ public class Texture2DConverter : AssetConverter<StaticTexture2DWrapper, StaticT
                 if (File.Exists(assetPath) && AssetConversionHelper.IsTextureFileSupportedByResonite(assetPath))
                     return new ImportTexture2DFile() { FilePath = assetPath };
             }
+        }
+        else if (isGeneratedLightmapPreview)
+        {
+            Debug.Log($"[ResoniteSDK] Texture2DConverter: sending generated lightmap preview \"{texture.name}\" as raw pixel data instead of file import.");
         }
 
         if (!texture.isReadable)
@@ -186,5 +191,15 @@ public class Texture2DConverter : AssetConverter<StaticTexture2DWrapper, StaticT
 
             return import;
         }
+    }
+
+    static bool IsGeneratedLightmapPreview(string assetPath)
+    {
+        if (string.IsNullOrWhiteSpace(assetPath))
+            return false;
+
+        var normalized = assetPath.Replace('\\', '/');
+        return normalized.Contains("/ResoniteSDK/Generated/LightmapVariants/") &&
+            Path.GetFileName(normalized).StartsWith("LMTex_", StringComparison.OrdinalIgnoreCase);
     }
 }

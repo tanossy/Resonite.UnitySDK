@@ -11,10 +11,18 @@ public class SkyboxConverter
     public GameObject SkyboxRoot;
 
     public FrooxEngine.SkyboxWrapper Skybox;
+    [NonSerialized]
     public FrooxEngine.AmbientLightSH2Wrapper AmbientLight;
     public FrooxEngine.ReflectionProbeWrapper ReflectionProbe;
+    [NonSerialized]
     public FrooxEngine.ReflectionProbeSH2Wrapper ReflectionProbeSH2;
+    [NonSerialized]
     public FrooxEngine.ValueCopySH_L2_Wrapper ValueCopy;
+
+    // Unity cannot serialize the generated Resonite wrapper fields that contain
+    // Sync<UnityEngine.Rendering.SphericalHarmonicsL2>. Keep SH2 sky ambient disabled for the
+    // current baked-lightmap verification path; the skybox material/probe can still be converted.
+    public static bool ConvertSphericalHarmonics = false;
 
     public void EnsureRoot()
     {
@@ -41,10 +49,20 @@ public class SkyboxConverter
     public void ConvertCurrentSkybox(IConversionContext context)
     {
         EnsureComponent(ref Skybox);
-        EnsureComponent(ref AmbientLight);
         EnsureComponent(ref ReflectionProbe);
-        EnsureComponent(ref ReflectionProbeSH2);
-        EnsureComponent(ref ValueCopy);
+
+        if (!ConvertSphericalHarmonics)
+        {
+            RemoveComponent(ref AmbientLight);
+            RemoveComponent(ref ReflectionProbeSH2);
+            RemoveComponent(ref ValueCopy);
+        }
+        else
+        {
+            EnsureComponent(ref AmbientLight);
+            EnsureComponent(ref ReflectionProbeSH2);
+            EnsureComponent(ref ValueCopy);
+        }
 
         // Setup the skybox material itself
         var skyboxMaterial = context.GetMaterial(RenderSettings.skybox);
@@ -65,9 +83,11 @@ public class SkyboxConverter
         ReflectionProbe.Data.ChangesSources[0] = Skybox.Data;
         ReflectionProbe.Data.ChangesSources[1] = skyboxMaterial;
 
+        if (!ConvertSphericalHarmonics)
+            return;
+
         // Assign the reflection probe as source for SH2 computation
         ReflectionProbeSH2.Data.Probe = ReflectionProbe.Data;
-
         // This should make it look roughly the same as Unity's own calculation
         ReflectionProbeSH2.Data.Order0Scale = 1.5f;
         ReflectionProbeSH2.Data.Order1Scale = 0.5f;
@@ -88,5 +108,18 @@ public class SkyboxConverter
 
         if (component == null)
             component = SkyboxRoot.AddComponent<T>();
+    }
+
+    void RemoveComponent<T>(ref T component)
+        where T : ResoniteComponent
+    {
+        if (component == null && SkyboxRoot != null)
+            component = SkyboxRoot.GetComponent<T>();
+
+        if (component == null)
+            return;
+
+        UnityEngine.Object.DestroyImmediate(component);
+        component = null;
     }
 }

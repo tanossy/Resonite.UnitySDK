@@ -51,6 +51,9 @@ public class ResoniteLinkWindow : EditorWindow
     public bool ConvertSkybox = true;
 
     [SerializeField]
+    public bool ForceRefreshGeneratedLightmaps = true;
+
+    [SerializeField]
     public bool LogMessageJSON;
 
     public string UniqueSessionId => _uniqueSessionId;
@@ -147,9 +150,21 @@ public class ResoniteLinkWindow : EditorWindow
         GUI.enabled = State == ConnectionState.Connected && !_converter.IsRealtimeModeActive;
 
         ConvertSkybox = GUILayout.Toggle(ConvertSkybox, "Convert Skybox");
+        ForceRefreshGeneratedLightmaps = GUILayout.Toggle(ForceRefreshGeneratedLightmaps, "Force Refresh Generated Lightmaps");
 
         if (GUILayout.Button("Send Current Scene"))
             SendCurrentScene();
+
+        EditorGUILayout.BeginHorizontal();
+        if (GUILayout.Button("Send Meshes Only"))
+            SendMeshesOnly();
+
+        if (GUILayout.Button("Send Materials Only"))
+            SendMaterialsOnly();
+        EditorGUILayout.EndHorizontal();
+
+        if (GUILayout.Button("Retry Missing Asset URLs"))
+            RetryMissingAssetURLs();
 
         GUI.enabled = State == ConnectionState.Connected;
 
@@ -224,6 +239,27 @@ public class ResoniteLinkWindow : EditorWindow
         EnsureConverter();
 
         _converter.ConvertScene();
+    }
+
+    public void SendMeshesOnly()
+    {
+        EnsureConverter();
+
+        _converter.ConvertMeshesOnly();
+    }
+
+    public void SendMaterialsOnly()
+    {
+        EnsureConverter();
+
+        _converter.ConvertMaterialsOnly();
+    }
+
+    void RetryMissingAssetURLs()
+    {
+        EnsureConverter();
+
+        _converter.RetryMissingAssetURLs();
     }
 
     void StartRealtimeMode()

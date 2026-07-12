@@ -70,7 +70,7 @@ public static class DirectionalLightmapBaker
     const string Uv2NormalPatchShaderName = "ResoniteSDK/Internal/Uv2NormalPatch";
 
     // 2026-07-11 3rd-pass bugfix (ロキ): see RawPassthroughBlit.shader's own header comment and
-    // BlitReadableDirAtlas below for why dirTex's Blit now goes through this material instead of
+    // BlitReadableAtlas below for why dirTex's Blit now goes through this material instead of
     // the argument-less Graphics.Blit(source, rt) overload this class used to call directly.
     const string RawPassthroughShaderName = "ResoniteSDK/Internal/RawPassthroughBlit";
 
@@ -222,12 +222,14 @@ public static class DirectionalLightmapBaker
 
         // 2026-07-11 3rd-pass bugfix (ロキ): color and dir are each materialized as a FULL,
         // CPU-readable atlas texture via their own proven-orientation-correct path (see
-        // LoadReadableColorAtlas / BlitReadableDirAtlas's own doc comments for exactly what
+        // LoadReadableColorAtlas / BlitReadableAtlas's own doc comments for exactly what
         // "proven" means for each) BEFORE any cropping happens, replacing this class's earlier
         // (still-wrong) from-scratch Graphics.Blit(source, rt)-based readback. ReadAtlasRegionClamped
         // below only ever does a plain Texture2D.GetPixels(x, y, w, h) against these — see its own
         // doc comment for why that specific API has no coordinate-system ambiguity left to get
-        // wrong.
+        // wrong. normalPatch (above) is now ALSO materialized via this same BlitReadableAtlas path
+        // (2026-07-12 bugfix — see RenderUv2NormalPatch's own doc comment), so all three of
+        // normalPixels/colorPixels/dirPixels below share one single, proven orientation convention.
         var colorAtlas = LoadReadableColorAtlas(decodedColor);
         if (colorAtlas == null)
         {
@@ -235,12 +237,12 @@ public static class DirectionalLightmapBaker
             return null; // Already logged inside LoadReadableColorAtlas.
         }
 
-        var dirAtlas = BlitReadableDirAtlas(dirTex, atlasWidth, atlasHeight);
+        var dirAtlas = BlitReadableAtlas(dirTex, atlasWidth, atlasHeight);
         if (dirAtlas == null)
         {
             UnityEngine.Object.DestroyImmediate(normalPatch);
             UnityEngine.Object.DestroyImmediate(colorAtlas);
-            return null; // Already logged inside BlitReadableDirAtlas.
+            return null; // Already logged inside BlitReadableAtlas.
         }
 
         Color[] normalPixels;
@@ -304,32 +306,65 @@ public static class DirectionalLightmapBaker
 
     /// <summary>
     /// Deterministic, process/session-stable identity string for a scene renderer, used as part
-    /// of this class's persisted asset filename. Deliberately NOT string.GetHashCode() (its
-    /// output is explicitly documented by Microsoft as unstable across .NET versions/processes,
-    /// which would make the generated filename — and therefore cache hits — non-reproducible
-    /// across Editor sessions) and NOT Object.GetInstanceID() (same non-portability caveat
-    /// LightmapMaterialCache.GetSourceIdentity's own fallback branch already documents for
-    /// non-asset materials) — instead, a simple FNV-1a fold of the renderer's full scene
-    /// hierarchy path, which is stable for as long as the scene's object names/parenting don't
-    /// change (an acceptable, already-precedented level of rigor — see this method's call site
-    /// comment).
+    /// of this class's persisted asset filename.
+    ///
+    /// 2026-07-12 bugfix (バグハンター/ロキ レビュー指摘, ダイダロス対応): this used to be a
+    /// simple FNV-1a fold of the renderer's full scene hierarchy path built from GameObject
+    /// NAMES only (t.name at every ancestor, joined with "/"). Two sibling GameObjects under the
+    /// same parent that happen to share the same name — a routine, unremarkable mistake in
+    /// prefab-heavy world authoring (duplicate + forgot to rename) — folded to the EXACT SAME
+    /// hash, and therefore the exact same output PNG asset path (this identity string is used
+    /// directly as part of that path, a few lines below this method's call site). The SECOND
+    /// such renderer's bake silently overwrote the FIRST renderer's already-persisted LMDir_*.png
+    /// with its own, unrelated content — and because the asset path doubles as this class's own
+    /// cache key (_bakedByPath / IsHashCurrent), the first renderer would then read back the
+    /// second renderer's directional lighting on its very next lookup, with no warning or error
+    /// anywhere in the pipeline. A purely name-derived string can never distinguish this case, no
+    /// matter how it's subsequently hashed — the fix has to change what's being hashed, not the
+    /// hash function.
+    ///
+    /// Fixed by keying off UnityEditor.GlobalObjectId.GetGlobalObjectIdSlow(renderer) instead of
+    /// the name-path. Confirmed as a real Editor-only API by directly grepping this project's own
+    /// installed UnityEditor.dll (2022.3.22f1) for its symbols — not assumed: both the public
+    /// entry point (`UnityEditor.GlobalObjectId`, `GetGlobalObjectIdSlow`) and its native-bound
+    /// implementation (`GetGlobalObjectIdSlow_Injected`) are present. GlobalObjectId is Unity's
+    /// own mechanism for a persistent, CONTENT-derived (scene/prefab asset GUID + the object's own
+    /// local file identifier) identity for a scene object — not name-derived — so two same-named
+    /// sibling GameObjects always carry two different local file identifiers and can never collide
+    /// here the way the old name-path hash did. `.ToString()` is used as the actual hash input
+    /// (rather than hashing the struct's fields by hand) purely so the existing FNV-1a fold below
+    /// — already this codebase's own filename-hash convention, see HashScaleOffset/FloatBits in
+    /// LightmapMaterialCache.cs for the equivalent precedent — can stay unchanged and keep
+    /// producing the same fixed-width 8-hex-char filename component as before this fix.
+    /// GlobalObjectId's own persistence guarantee (stable across Editor sessions for the same
+    /// saved scene object) is a strictly STRONGER guarantee than the old name-path had, so this is
+    /// a pure correctness upgrade with no new staleness risk introduced.
     /// </summary>
     static string GetRendererIdentity(Renderer renderer)
     {
-        var pathParts = new List<string>();
-        var t = renderer.transform;
-        while (t != null)
+        string idSource;
+
+        try
         {
-            pathParts.Add(t.name);
-            t = t.parent;
+            idSource = GlobalObjectId.GetGlobalObjectIdSlow(renderer).ToString();
         }
-        pathParts.Reverse();
-        string hierarchyPath = string.Join("/", pathParts);
+        catch (Exception ex)
+        {
+            // Defensive only: GetGlobalObjectIdSlow is documented to work for any real
+            // scene/asset Object and has not been observed to throw anywhere in this codebase's
+            // own testing, but this method must never throw (GetNormalBakedLightmapInner has no
+            // null-identity handling downstream) — fall back to the old, strictly-worse-but-still-
+            // functional name-path identity rather than aborting this renderer's whole bake.
+            Debug.LogWarning($"[ResoniteSDK] DirectionalLightmapBaker: GlobalObjectId.GetGlobalObjectIdSlow failed for " +
+                $"renderer \"{renderer.name}\": {ex}. Falling back to a name-path-derived identity, which cannot " +
+                "distinguish same-named sibling GameObjects (see this method's own doc comment for why that matters).");
+            idSource = BuildNameHierarchyPath(renderer);
+        }
 
         unchecked
         {
             uint hash = 2166136261;
-            foreach (char c in hierarchyPath)
+            foreach (char c in idSource)
             {
                 hash ^= c;
                 hash *= 16777619;
@@ -339,11 +374,60 @@ public static class DirectionalLightmapBaker
     }
 
     /// <summary>
+    /// Pre-2026-07-12 identity source, kept only as GetRendererIdentity's defensive fallback if
+    /// GlobalObjectId.GetGlobalObjectIdSlow itself throws — see that method's doc comment for why
+    /// this alone (name-only, no true uniqueness guarantee) is no longer the primary path.
+    /// </summary>
+    static string BuildNameHierarchyPath(Renderer renderer)
+    {
+        var pathParts = new List<string>();
+        var t = renderer.transform;
+        while (t != null)
+        {
+            pathParts.Add(t.name);
+            t = t.parent;
+        }
+        pathParts.Reverse();
+        return string.Join("/", pathParts);
+    }
+
+    /// <summary>
     /// Rasterizes <paramref name="mesh"/>'s geometry (vertex) normals, transformed by
     /// <paramref name="renderer"/>'s own object-to-world matrix, into UV2 (lightmap UV) space, at
     /// <paramref name="width"/> x <paramref name="height"/> texels — see Uv2NormalPatch.shader for
     /// the actual rasterization technique. Returns a readable Texture2D (caller owns/destroys it)
     /// or null if the shader can't be found.
+    ///
+    /// 2026-07-12 bugfix (バグハンター指摘, ダイダロス対応): this CommandBuffer.DrawMesh pass has
+    /// no camera/view-projection context at all — the render target's UV parameterization itself
+    /// IS the "projection" (see this method's own DrawMesh call and Uv2NormalPatch.shader's vert()
+    /// for how the mesh's UV2 is mapped straight to clip space). Uv2NormalPatch.shader used to
+    /// additionally multiply its own manually-built clip-space Y by `_ProjectionParams.x` as a
+    /// hand-rolled Y-flip compensation — but `_ProjectionParams` is a value Unity's own camera
+    /// pipeline populates via SetupCameraProperties for whatever camera is CURRENTLY rendering;
+    /// Graphics.ExecuteCommandBuffer with no camera involved never triggers that call, so reading
+    /// `_ProjectionParams.x` here was reading whatever this global shader property happened to be
+    /// left over from — the Scene/Game view's last-rendered camera, or 1 if nothing had rendered
+    /// yet — not a value meaningfully tied to THIS pass's own render target. This is the exact
+    /// same class of "silent orientation bug" this class's own header comment and
+    /// LoadReadableColorAtlas/BlitReadableAtlas doc comments already describe having been found
+    /// and fixed (three times) for the color/dir atlas readback on 2026-07-11 — it had simply not
+    /// yet been checked for this method specifically.
+    ///
+    /// Fixed the same way those were: Uv2NormalPatch.shader's vert() no longer attempts any
+    /// manual flip at all (see that file's own updated comment) — it renders into this method's
+    /// own temporary "rawRt" RenderTexture in whatever raw orientation DrawMesh's own default
+    /// clip-space write produces, and this method then routes that RT through BlitReadableAtlas
+    /// exactly like
+    /// BlitReadableDirAtlas already did for dirTex — i.e. through RawPassthroughBlit.shader's
+    /// UnityObjectToClipPos-based vert(), which is Unity's own PROVEN (real-machine, per-renderer
+    /// luminance-correlation-verified — see BlitReadableAtlas's own doc comment) per-platform
+    /// Y-orientation compensation for exactly this "Blit a texture into an RT, then read that RT
+    /// back" shape, instead of a second, independent, never-verified guess at the same
+    /// correction. This guarantees normalPatch ends up in the IDENTICAL pixel-orientation
+    /// convention as colorAtlas/dirAtlas (both of which already go through BlitReadableAtlas or an
+    /// equivalent proven path), which is exactly what GetNormalBakedLightmapInner's per-index
+    /// (normalPixels[i] / colorPixels[i] / dirPixels[i]) combine loop requires to be correct.
     /// </summary>
     static Texture2D RenderUv2NormalPatch(Renderer renderer, Mesh mesh, int width, int height)
     {
@@ -355,10 +439,8 @@ public static class DirectionalLightmapBaker
         }
 
         var material = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
-        RenderTexture rt = null;
-        RenderTexture previousActive = null;
+        RenderTexture rawRt = null;
         CommandBuffer cmd = null;
-        Texture2D result = null;
 
         try
         {
@@ -367,10 +449,10 @@ public static class DirectionalLightmapBaker
             // — HDR-range headroom isn't actually needed for a 0..1 encoded normal, but there is
             // no reason to use a different format/precision than the rest of this feature's own
             // pipeline.
-            rt = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
+            rawRt = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
 
             cmd = new CommandBuffer { name = "ResoniteSDK.Uv2NormalPatch" };
-            cmd.SetRenderTarget(rt);
+            cmd.SetRenderTarget(rawRt);
             // Clear to mid-gray ((0.5,0.5,0.5) decodes to the zero vector via `raw*2-1` on the
             // C# side) so texels this renderer's own UV island never actually covers (gutter/
             // background) are unambiguously "no data" rather than an arbitrary real direction —
@@ -383,21 +465,16 @@ public static class DirectionalLightmapBaker
 
             Graphics.ExecuteCommandBuffer(cmd);
 
-            previousActive = RenderTexture.active;
-            RenderTexture.active = rt;
-
-            result = new Texture2D(width, height, TextureFormat.RGBAFloat, false, true);
-            result.ReadPixels(new Rect(0, 0, width, height), 0, 0);
-            result.Apply();
-
-            return result;
+            // See this method's own doc comment above: route the just-rendered rawRt through the
+            // same proven Blit+ReadPixels helper BlitReadableAtlas already uses for dirTex, rather
+            // than ReadPixels-ing directly off the DrawMesh-rendered active RT (the old,
+            // _ProjectionParams.x-dependent path).
+            return BlitReadableAtlas(rawRt, width, height);
         }
         finally
         {
-            if (previousActive != null || rt != null)
-                RenderTexture.active = previousActive;
-            if (rt != null)
-                RenderTexture.ReleaseTemporary(rt);
+            if (rawRt != null)
+                RenderTexture.ReleaseTemporary(rawRt);
             if (cmd != null)
                 cmd.Release();
             UnityEngine.Object.DestroyImmediate(material);
@@ -480,7 +557,7 @@ public static class DirectionalLightmapBaker
     /// <summary>
     /// 2026-07-11 3rd-pass bugfix (ロキ): faithfully replicates LightmapDecoder.DecodeAndSave's
     /// own Graphics.Blit(source, rt, material) + whole-image ReadPixels sequence (see that method
-    /// and LightmapDecode.shader) for <paramref name="dirTex"/>, instead of this class's own
+    /// and LightmapDecode.shader) for <paramref name="source"/>, instead of this class's own
     /// earlier from-scratch Graphics.Blit(source, rt) call (no material). Real-machine
     /// verification (per-renderer luminance correlation against LightmapDecoder's own production-
     /// proven decoded atlas) showed the material-less Blit overload does not reliably preserve
@@ -492,16 +569,23 @@ public static class DirectionalLightmapBaker
     ///
     /// Uses RawPassthroughBlit.shader — the exact same vert() idiom as LightmapDecode.shader, but
     /// a pure 4-channel passthrough frag() — because LightmapDecode.shader's own frag() always
-    /// forces alpha to 1, which would destroy dirTex's own alpha/.w channel that
-    /// DecodeDirectionalLightmap's formula needs as its denominator (see this class's combine
-    /// step in GetNormalBakedLightmapInner).
+    /// forces alpha to 1, which would destroy a raw direction/normal source's own alpha/.w channel
+    /// (DecodeDirectionalLightmap's formula needs dirTex's own alpha as its denominator — see this
+    /// class's combine step in GetNormalBakedLightmapInner).
     ///
-    /// dirTex is intentionally read with NO gamma/sRGB decode (RenderTextureReadWrite.Linear RT +
-    /// a linear:true CPU readback texture) — unchanged from before this bugfix — because
-    /// LightmapData.lightmapDir is raw, non-color direction data (see this class's header comment
-    /// on "dirTex read-with-no-decode is not a guess"). Caller owns/destroys the returned texture.
+    /// <paramref name="source"/> is intentionally read with NO gamma/sRGB decode
+    /// (RenderTextureReadWrite.Linear RT + a linear:true CPU readback texture) — because this is
+    /// non-color direction/normal data, not albedo (see this class's header comment on "dirTex
+    /// read-with-no-decode is not a guess"). Caller owns/destroys the returned texture.
+    ///
+    /// 2026-07-12 bugfix (バグハンター指摘, ダイダロス対応): generalized from
+    /// "BlitReadableDirAtlas(Texture2D dirTex, ...)" to accept any <see cref="Texture"/> source —
+    /// RenderUv2NormalPatch now also routes its own freshly-DrawMesh-rendered RenderTexture through
+    /// this exact same proven Blit+ReadPixels sequence (a RenderTexture is itself a valid Blit
+    /// source), instead of duplicating a second, independent, unverified readback with its own
+    /// hand-rolled Y-flip attempt. See RenderUv2NormalPatch's own doc comment for the full story.
     /// </summary>
-    static Texture2D BlitReadableDirAtlas(Texture2D dirTex, int atlasWidth, int atlasHeight)
+    static Texture2D BlitReadableAtlas(Texture source, int atlasWidth, int atlasHeight)
     {
         var shader = Shader.Find(RawPassthroughShaderName);
 
@@ -521,7 +605,7 @@ public static class DirectionalLightmapBaker
             rt = RenderTexture.GetTemporary(atlasWidth, atlasHeight, 0, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
             // Material-based 3-arg Blit — see this method's doc comment for why the argument-less
             // 2-arg overload this class used to call here is exactly the bug.
-            Graphics.Blit(dirTex, rt, material);
+            Graphics.Blit(source, rt, material);
 
             previousActive = RenderTexture.active;
             RenderTexture.active = rt;
@@ -576,7 +660,8 @@ public static class DirectionalLightmapBaker
     ///
     /// 2026-07-11 3rd-pass bugfix (ロキ): <paramref name="atlas"/> is now always an already-fully-
     /// materialized, CPU-readable Texture2D in a PROVEN-correct orientation (see
-    /// LoadReadableColorAtlas / BlitReadableDirAtlas, this method's only two callers) — so the
+    /// LoadReadableColorAtlas / BlitReadableAtlas, whose outputs are this method's only two
+    /// callsites' inputs) — so the
     /// actual crop below is a single, direct Texture2D.GetPixels(x, y, w, h) call. No render
     /// target and no Rect-against-an-active-render-target are involved at any point in this
     /// method anymore, which is exactly the class of ambiguity earlier bugfix attempts in this

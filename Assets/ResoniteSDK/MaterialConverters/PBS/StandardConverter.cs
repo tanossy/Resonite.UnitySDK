@@ -18,10 +18,10 @@ public class StandardConverter : StandardBaseConverter<PBS_MetallicWrapper, PBS_
 
         var data = PBS.Data;
 
-        data.Smoothness = material.GetFloat("_Glossiness");
-        data.Metallic = material.GetFloat("_Metallic");
+        data.Smoothness = GetFloatOrDefault(material, "_Glossiness");
+        data.Metallic = GetFloatOrDefault(material, "_Metallic");
 
-        data.MetallicMap = context.GetITexture2D(material.GetTexture("_MetallicGlossMap"));
+        data.MetallicMap = context.GetITexture2D(GetTextureOrDefault(material, "_MetallicGlossMap"));
 
         return provider;
     }

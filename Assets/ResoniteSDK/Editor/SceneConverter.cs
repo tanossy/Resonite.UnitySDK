@@ -19,6 +19,8 @@ public class SceneConverter : IConversionContext
 
     public bool LogMessageJSON => _window.LogMessageJSON;
     public bool ConvertSkybox => _window.ConvertSkybox;
+    public bool ForceRefreshGeneratedLightmaps => _window.ForceRefreshGeneratedLightmaps;
+    public ResoniteSdkConversionPass ActiveConversionPass => ConversionPassState.ActivePass;
 
     // TODO!!! Move this to a dedicated connection manager so the Window is only managing the UI?
     ResoniteLinkWindow _window;
@@ -231,15 +233,79 @@ public class SceneConverter : IConversionContext
 
     public void ConvertScene()
     {
+        ConvertScene(ResoniteSdkConversionPass.Full);
+    }
+
+    public void ConvertMeshesOnly()
+    {
+        ConvertScene(ResoniteSdkConversionPass.MeshesOnly);
+    }
+
+    public void ConvertMaterialsOnly()
+    {
+        ConvertScene(ResoniteSdkConversionPass.MaterialsOnly);
+    }
+
+    void ConvertScene(ResoniteSdkConversionPass pass)
+    {
+        if (pass != ResoniteSdkConversionPass.MeshesOnly && ForceRefreshGeneratedLightmaps)
+            LightmapMaterialCache.ClearGeneratedLightmapVariants();
+
         // Ensure asset converter has been initialized
         EnsureAssetConverter();
 
-        if (ConvertSkybox)
+        if (pass == ResoniteSdkConversionPass.Full && ConvertSkybox)
             _skybox.EnsureRoot();
 
         var roots = SceneManager.GetActiveScene().GetRootGameObjects();
 
-        Convert(roots.Select(g => g.transform));
+        var previousPass = ConversionPassState.ActivePass;
+        ConversionPassState.ActivePass = pass;
+        try
+        {
+            Convert(roots.Select(g => g.transform));
+        }
+        finally
+        {
+            ConversionPassState.ActivePass = previousPass;
+        }
+    }
+
+    public void RetryMissingAssetURLs()
+    {
+        try
+        {
+            EnsureAssetConverter();
+
+            if (Link == null || !Link.IsConnected)
+                throw new InvalidOperationException("ResoniteLink is not connected. Reconnect before retrying missing assets.");
+
+            var scheduled = _assetConverter.ScheduleMissingAssetURLRetries();
+
+            if (scheduled == 0)
+            {
+                Debug.Log("[ResoniteSDK] Retry Missing Asset URLs: no local StaticAssetProvider with a null URL was found.");
+                return;
+            }
+            else
+            {
+                var messages = new List<DataModelOperation>();
+
+                Convert(_assetConverter.AssetsRoot, messages);
+
+                foreach (var root in _assetConverter.UpdatedAssetProviderRoots)
+                    ConvertHierarchy(root, messages);
+
+                SendOperationBatch(messages);
+
+                Debug.Log($"[ResoniteSDK] Retry Missing Asset URLs: retried {scheduled} missing asset provider(s).");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"FATAL ERROR while retrying missing asset URLs!\n{ex}");
+            IsCorrupted = true;
+        }
     }
 
     public void Convert(IEnumerable<Transform> roots)
@@ -248,7 +314,7 @@ public class SceneConverter : IConversionContext
         {
             _assetConverter.BeginConversion();
 
-            if (ConvertSkybox)
+            if (ActiveConversionPass == ResoniteSdkConversionPass.Full && ConvertSkybox)
                 _skybox.ConvertCurrentSkybox(this);
 
             // First update all component conversions
@@ -290,6 +356,9 @@ public class SceneConverter : IConversionContext
 
     void SendOperationBatch(List<DataModelOperation> messages)
     {
+        if (Link == null || !Link.IsConnected)
+            throw new InvalidOperationException("ResoniteLink is not connected. Reconnect before sending the scene.");
+
         // Only send messages when there are actually any
         // We still want to run the rest of the function, because there can be any asset conversions scheduled
         if (messages.Count > 0)
@@ -308,15 +377,12 @@ public class SceneConverter : IConversionContext
                 var response = await Link.RunDataModelOperationBatch(messages);
 
                 if (!response.Success)
-                {
-                    Debug.LogError($"Data model batch operation failed: {response.ErrorInfo}");
-                    return;
-                }
+                    throw new InvalidOperationException($"Data model batch operation failed: {response.ErrorInfo}");
 
                 foreach (var subResponse in response.Responses)
                     if (!subResponse.Success)
-                        Debug.LogError($"Operation failed for {subResponse.SourceMessageID}: {subResponse.ErrorInfo}");
-            }).Wait();
+                        throw new InvalidOperationException($"Operation failed for {subResponse.SourceMessageID}: {subResponse.ErrorInfo}");
+            }).GetAwaiter().GetResult();
         }
 
         _assetConverter.ProcessConversions(Link);

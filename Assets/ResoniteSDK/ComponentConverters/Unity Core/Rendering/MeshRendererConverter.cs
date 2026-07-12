@@ -14,10 +14,13 @@ public static class MeshRendererHelper
         // We need to get the matching mesh filter for this to get the mesh data
         var meshFilter = unity.transform.GetComponent<MeshFilter>();
 
-        if (meshFilter == null)
-            resonite.Mesh = null;
-        else
-            resonite.Mesh = context.GetMesh(meshFilter.sharedMesh);
+        if (ConversionPassState.ShouldConvertMeshes)
+        {
+            if (meshFilter == null)
+                resonite.Mesh = null;
+            else
+                resonite.Mesh = context.GetMesh(meshFilter.sharedMesh);
+        }
     }
 
     // allowLightmap defaults to false so that SkinnedMeshRendererHelper.SetFrom (which calls this
@@ -66,6 +69,9 @@ public static class MeshRendererHelper
         }
 
         resonite.SortingOrder = unity.sortingOrder;
+
+        if (!ConversionPassState.ShouldConvertMaterials)
+            return;
 
         // Convert materials!
         var sourceMaterials = unity.sharedMaterials;

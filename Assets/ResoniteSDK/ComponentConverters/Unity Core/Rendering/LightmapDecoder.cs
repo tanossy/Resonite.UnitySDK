@@ -66,6 +66,10 @@ public static class LightmapDecoder
     // attempt per-lightmap auto-exposure.
     public static float RangeScale = 1.0f;
 
+    // ResoniteLink can drop the WebSocket while importing very large decoded lightmap PNGs. Keep
+    // this preview export small enough for reliable send/retry while preserving the same atlas UVs.
+    public static int MaxPreviewTextureSize = 256;
+
     /// <summary>
     /// Clears the in-memory decoded-lightmap front cache. Called from
     /// LightmapMaterialCache's "Resonite SDK/Clear Generated Lightmap Variants" menu item right
@@ -120,7 +124,7 @@ public static class LightmapDecoder
         // and stays stable across Editor sessions/domain reloads for an unchanged bake. We record
         // it in the decoded PNG's own TextureImporter.userData so a later call can tell whether
         // it needs to re-decode or can just hand back the existing asset.
-        var sourceHash = sourceLightmap.imageContentsHash.ToString();
+        var sourceHash = $"{sourceLightmap.imageContentsHash}|range:{RangeScale:0.########}|max:{MaxPreviewTextureSize}";
 
         // Memory front-cache lookup first. `cached != null` uses Unity's overloaded null check,
         // so a destroyed/unloaded Texture2D (e.g. after an AssetDatabase.DeleteAsset elsewhere, or
@@ -289,6 +293,21 @@ public static class LightmapDecoder
             UnityEngine.Object.DestroyImmediate(blitMaterial);
         }
 
+        int outputWidth = width;
+        int outputHeight = height;
+        int maxPreviewSize = Mathf.Max(1, MaxPreviewTextureSize);
+
+        if (Mathf.Max(width, height) > maxPreviewSize)
+        {
+            float scale = maxPreviewSize / (float)Mathf.Max(width, height);
+            outputWidth = Mathf.Max(1, Mathf.RoundToInt(width * scale));
+            outputHeight = Mathf.Max(1, Mathf.RoundToInt(height * scale));
+            pixels = ResizeBilinear(pixels, width, height, outputWidth, outputHeight);
+
+            Debug.Log($"[ResoniteSDK] LightmapDecoder: downscaled decoded lightmap \"{source.name}\" " +
+                $"{width}x{height} -> {outputWidth}x{outputHeight} for ResoniteLink preview upload.");
+        }
+
         // Clamp to 0..1 (after the adjustable RangeScale headroom knob - see its doc comment for
         // why HDR values above 1.0 are lost here), then - Linear color space projects only -
         // convert linear -> gamma space, since the output texture below is stored/imported as an
@@ -316,19 +335,51 @@ public static class LightmapDecoder
         // decodeMode selected the RGBM/Double-LDR path (decodeMode >= 0.5).
         bool skipGammaConversion = isGammaColorSpace && decodeMode >= 0.5f;
 
+        // 2026-07-12 diagnostic addition (バグハンター指摘, ダイダロス対応): a full tonemapping
+        // implementation is out of scope for this pass (see RangeScale's own doc comment - v1
+        // only offers a manual exposure knob), but the silent, unwarned clamp below has been
+        // measured on real bakes to actually clip real content (real, measured Unity output has
+        // shown maxChannel values of 1.7-2.4 on bright highlights before this diagnostic existed).
+        // Track the true (post-RangeScale, pre-clamp) max channel value and how many pixels were
+        // actually affected, purely so the next bake's Console output makes that loss visible
+        // instead of a bright highlight silently going flat/white with no trace anywhere.
+        float maxChannelObserved = 0f;
+        int clippedPixelCount = 0;
+
         for (int i = 0; i < pixels.Length; i++)
         {
             var c = pixels[i];
 
-            c.r = Mathf.Clamp01(c.r * RangeScale);
-            c.g = Mathf.Clamp01(c.g * RangeScale);
-            c.b = Mathf.Clamp01(c.b * RangeScale);
+            float scaledR = c.r * RangeScale;
+            float scaledG = c.g * RangeScale;
+            float scaledB = c.b * RangeScale;
+
+            float pixelMax = Mathf.Max(scaledR, Mathf.Max(scaledG, scaledB));
+            if (pixelMax > maxChannelObserved)
+                maxChannelObserved = pixelMax;
+            if (pixelMax > 1f)
+                clippedPixelCount++;
+
+            c.r = Mathf.Clamp01(scaledR);
+            c.g = Mathf.Clamp01(scaledG);
+            c.b = Mathf.Clamp01(scaledB);
             c.a = 1f;
 
             pixels[i] = skipGammaConversion ? c : c.gamma;
         }
 
-        var outputTex = new Texture2D(width, height, TextureFormat.RGBA32, false, false);
+        if (maxChannelObserved > 1f)
+        {
+            float clippedPercent = pixels.Length > 0 ? 100f * clippedPixelCount / pixels.Length : 0f;
+            Debug.LogWarning($"[ResoniteSDK] LightmapDecoder: lightmap \"{source.name}\" (-> {path}) has HDR values above " +
+                $"the 8-bit PNG's 0..1 range - max observed channel value (after RangeScale={RangeScale:0.###}) was " +
+                $"{maxChannelObserved:0.###}, {clippedPixelCount} of {pixels.Length} pixel(s) ({clippedPercent:0.#}%) had at " +
+                "least one channel clipped to 1.0 on export. Highlight detail above 1.0 has been lost in the saved PNG - " +
+                "see LightmapDecoder.RangeScale's own doc comment for the manual exposure knob that can pull this back " +
+                "down before it clips.");
+        }
+
+        var outputTex = new Texture2D(outputWidth, outputHeight, TextureFormat.RGBA32, false, false);
         outputTex.SetPixels(pixels);
         outputTex.Apply();
 
@@ -368,5 +419,41 @@ public static class LightmapDecoder
         importer.SaveAndReimport();
 
         return AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+    }
+
+    static Color[] ResizeBilinear(Color[] sourcePixels, int sourceWidth, int sourceHeight, int outputWidth, int outputHeight)
+    {
+        var resized = new Color[outputWidth * outputHeight];
+
+        for (int y = 0; y < outputHeight; y++)
+        {
+            float sourceY = ((y + 0.5f) * sourceHeight / outputHeight) - 0.5f;
+
+            for (int x = 0; x < outputWidth; x++)
+            {
+                float sourceX = ((x + 0.5f) * sourceWidth / outputWidth) - 0.5f;
+                resized[(y * outputWidth) + x] = SampleBilinear(sourcePixels, sourceWidth, sourceHeight, sourceX, sourceY);
+            }
+        }
+
+        return resized;
+    }
+
+    static Color SampleBilinear(Color[] pixels, int width, int height, float x, float y)
+    {
+        int x0 = Mathf.Clamp(Mathf.FloorToInt(x), 0, width - 1);
+        int y0 = Mathf.Clamp(Mathf.FloorToInt(y), 0, height - 1);
+        int x1 = Mathf.Clamp(x0 + 1, 0, width - 1);
+        int y1 = Mathf.Clamp(y0 + 1, 0, height - 1);
+
+        float tx = Mathf.Clamp01(x - x0);
+        float ty = Mathf.Clamp01(y - y0);
+
+        Color c00 = pixels[(y0 * width) + x0];
+        Color c10 = pixels[(y0 * width) + x1];
+        Color c01 = pixels[(y1 * width) + x0];
+        Color c11 = pixels[(y1 * width) + x1];
+
+        return Color.Lerp(Color.Lerp(c00, c10, tx), Color.Lerp(c01, c11, tx), ty);
     }
 }

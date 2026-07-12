@@ -8,6 +8,9 @@ public static class SkinnedMeshRendererHelper
         // Shadow casting, materials and so on, EXCEPT the mesh and skinned data
         resonite.SetFrom((UnityEngine.Renderer)unity, context);
 
+        if (!ConversionPassState.ShouldConvertMeshes)
+            return;
+
         var mesh = unity.sharedMesh;
 
         // SkinnedMeshRenderer doesn't use mesh filter, we just get it directly

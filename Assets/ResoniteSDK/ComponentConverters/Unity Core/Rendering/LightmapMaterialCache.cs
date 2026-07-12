@@ -141,7 +141,7 @@ public static class LightmapMaterialCache
     /// reproducible by re-running scene conversion, so this is always safe to run.
     /// </summary>
     [MenuItem("Resonite SDK/Clear Generated Lightmap Variants")]
-    static void ClearGeneratedLightmapVariants()
+    public static void ClearGeneratedLightmapVariants()
     {
         _materialByPath.Clear();
         LightmapDecoder.ClearMemoryCache();
@@ -269,6 +269,20 @@ public static class LightmapMaterialCache
         // Decode (or reuse the already-decoded, hash-checked) baked lightmap texture for this
         // scene/index pair. See LightmapDecoder for the decode + persistence logic.
         var bakedLightmapTex = LightmapDecoder.GetDecodedLightmap(sceneGuid, lightmapIndex, lightmapData.lightmapColor);
+
+        // 2026-07-12 bugfix (バグハンター指摘, ダイダロス対応): this class's own header comment
+        // ("適格条件を満たさない場合はsourceのまま変更なしで返る") promises source is returned
+        // unchanged whenever this material/renderer isn't eligible - but GetDecodedLightmap can
+        // itself return null (missing decode shader, failed AssetDatabase import, etc. - see its
+        // own doc comment) even once every eligibility check above has already passed, and that
+        // case was never checked here. Falling through with bakedLightmapTex == null would still
+        // create/keep the variant Material and unconditionally SetTexture("_BakedLightmap", null)
+        // on it below - producing a lightmap-marker-shaded material with NO lightmap texture
+        // actually assigned, instead of honoring the documented "fall back to source" contract.
+        // Bail out to the same `return source;` every other eligibility guard above already uses.
+        if (bakedLightmapTex == null)
+            return source;
+
         var bakedLightmapST = lightmapScaleOffset;
 
         // --- ダイダロス追加: 「法線を焼き込む」実験的パス（2026-07-11） --------------------

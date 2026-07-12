@@ -24,6 +24,12 @@ public class BakedLightmapStandardConverter : ResoniteMaterialConverter
     // lightmap through the additive SecondaryEmissiveMap slot.
     public static bool EmissiveLightmapMode = false;
 
+    // Verification mode for large baked scenes. The first in-world check only needs geometry,
+    // material colors, and the baked lightmap; uploading every source albedo/normal/metallic/
+    // occlusion/emission texture can overwhelm ResoniteLink before anything appears in-world.
+    // Flip to false later when the lightmap path itself has been confirmed.
+    public static bool LightmapPreviewUploadOnly = true;
+
     public PBS_MultiUV_MetallicWrapper PBS;
 
     public override IAssetProvider<FrooxEngine.Material> UpdateConversion(UnityEngine.Material material, IConversionContext context)
@@ -51,7 +57,7 @@ public class BakedLightmapStandardConverter : ResoniteMaterialConverter
 
         // --- Albedo (UV0) ---
         data.AlbedoColor = material.GetColor("_Color").ToColorX_sRGB();
-        data.AlbedoTexture = context.GetITexture2D(material.GetTexture("_MainTex"));
+        data.AlbedoTexture = LightmapPreviewUploadOnly ? null : context.GetITexture2D(material.GetTexture("_MainTex"));
         var mainTexScale = material.GetTextureScale("_MainTex");
         var mainTexOffset = material.GetTextureOffset("_MainTex");
         data.AlbedoScale = mainTexScale;
@@ -63,14 +69,14 @@ public class BakedLightmapStandardConverter : ResoniteMaterialConverter
         // uv_MainTex transform as albedo (only the detail albedo map gets its own UV2 transform),
         // so we mirror _MainTex's ScaleOffset here rather than leaving these at their zeroed
         // Sync<Vector2> default (which would otherwise collapse every sample to a single texel).
-        data.NormalMap = context.GetITexture2D(material.GetTexture("_BumpMap"));
+        data.NormalMap = LightmapPreviewUploadOnly ? null : context.GetITexture2D(material.GetTexture("_BumpMap"));
         data.NormalScale = material.GetFloat("_BumpScale");
         data.NormalMapScale = mainTexScale;
         data.NormalMapOffset = mainTexOffset;
         data.NormalMapUV = 0;
 
         // --- Occlusion (UV0) ---
-        data.OcclusionMap = context.GetITexture2D(material.GetTexture("_OcclusionMap"));
+        data.OcclusionMap = LightmapPreviewUploadOnly ? null : context.GetITexture2D(material.GetTexture("_OcclusionMap"));
         data.OcclusionMapScale = mainTexScale;
         data.OcclusionMapOffset = mainTexOffset;
         data.OcclusionMapUV = 0;
@@ -79,7 +85,7 @@ public class BakedLightmapStandardConverter : ResoniteMaterialConverter
         if (material.IsKeywordEnabled("_EMISSION"))
         {
             data.EmissiveColor = material.GetColor("_EmissionColor").ToColorX_sRGB();
-            data.EmissiveMap = context.GetITexture2D(material.GetTexture("_EmissionMap"));
+            data.EmissiveMap = LightmapPreviewUploadOnly ? null : context.GetITexture2D(material.GetTexture("_EmissionMap"));
         }
         else
         {
@@ -93,7 +99,7 @@ public class BakedLightmapStandardConverter : ResoniteMaterialConverter
         // --- Metallic / Smoothness (UV0) ---
         data.Metallic = material.GetFloat("_Metallic");
         data.Smoothness = material.GetFloat("_Glossiness");
-        data.MetallicMap = context.GetITexture2D(material.GetTexture("_MetallicGlossMap"));
+        data.MetallicMap = LightmapPreviewUploadOnly ? null : context.GetITexture2D(material.GetTexture("_MetallicGlossMap"));
         data.MetallicMapScale = mainTexScale;
         data.MetallicMapOffset = mainTexOffset;
         data.MetallicMapUV = 0;

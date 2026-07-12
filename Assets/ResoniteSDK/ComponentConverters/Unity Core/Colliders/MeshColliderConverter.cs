@@ -10,7 +10,8 @@ public static class MeshColliderHelper
         // Set the base data
         resonite.SetFrom((UnityEngine.Collider)unity);
 
-        resonite.Mesh = context.GetMesh(unity.sharedMesh);
+        if (ConversionPassState.ShouldConvertMeshes)
+            resonite.Mesh = context.GetMesh(unity.sharedMesh);
 
         // Unity Mesh Colliders are one-sided based on their documentation:
         // https://docs.unity3d.com/6000.3/Documentation/Manual/mesh-colliders-introduction.html
@@ -25,7 +26,8 @@ public static class MeshColliderHelper
         // Set the base data
         resonite.SetFrom((UnityEngine.Collider)unity);
 
-        resonite.Mesh = context.GetMesh(unity.sharedMesh);
+        if (ConversionPassState.ShouldConvertMeshes)
+            resonite.Mesh = context.GetMesh(unity.sharedMesh);
     }
 }
 

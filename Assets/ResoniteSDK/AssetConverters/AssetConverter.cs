@@ -15,43 +15,55 @@ public abstract class AssetConverter : MonoBehaviour
     {
         var data = GenerateConversion();
         var name = AssetName;
+        var timestamp = GetAssetTimestamp();
 
         // Run any postprocessing
         PostProcessor?.Process(data);
 
-        // Store the timestamp after the conversion
-        // The timestamp can change during the conversion generation, so we make sure to change it after
-        LastTimestamp = GetAssetTimestamp();
-
         Task.Run(async () =>
         {
-            var result = await SendConversion(data, link);
-
-            if (!result.Success)
+            try
             {
-                Debug.LogError($"Failed to convert {AssetClass} {name}: {result.ErrorInfo}");
-                return;
+                var result = await SendConversion(data, link);
+
+                if (!result.Success)
+                    throw new InvalidOperationException($"Failed to convert {AssetClass} {name}: {result.ErrorInfo}");
+
+                // Assign the URL of the converted asset
+                var updateData = UpdateProvider(result.AssetURL, context);
+
+                // Send the update!
+                // We could just do it all at once, but having it pop piece by piece is more interactive and looks cooler :3
+                var update = new UpdateComponent()
+                {
+                    MessageID = context.GetUniqueMessageId($"Update{AssetClass}Provider_{name}"),
+                    Data = updateData,
+                };
+
+                var updateResult = await link.UpdateComponent(update);
+
+                if (!updateResult.Success)
+                    throw new InvalidOperationException($"Failed to update asset provider with URL: {updateResult.ErrorInfo}");
             }
-
-            // Assign the URL of the converted asset
-            var updateData = UpdateProvider(result.AssetURL, context);
-
-            // Send the update!
-            // We could just do it all at once, but having it pop piece by piece is more interactive and looks cooler :3
-            var update = new UpdateComponent()
+            catch
             {
-                MessageID = context.GetUniqueMessageId($"Update{AssetClass}Provider_{name}"),
-                Data = updateData,
-            };
-
-            var updateResult = await link.UpdateComponent(update);
-
-            if (!updateResult.Success)
-                Debug.LogError($"Failed to update asset provider with URL: " + updateResult.ErrorInfo);
+                ClearProviderURL();
+                throw;
+            }
         }).Wait();
+
+        // Store the timestamp only after both the upload and provider URL update succeeded. Failed
+        // conversions must not look cached/current on the next send.
+        LastTimestamp = timestamp;
     }
 
     public virtual bool HasAssetChanged() => GetAssetTimestamp() != LastTimestamp;
+
+    public virtual bool HasMissingProviderURL() => false;
+
+    public virtual bool CanRetryMissingProviderURL() => false;
+
+    protected virtual void ClearProviderURL() { }
 
     protected abstract ulong GetAssetTimestamp();
 
@@ -100,6 +112,18 @@ public abstract class AssetConverter<TWrapper, TProvider, TUnity, TResonite> : A
             return true;
 
         return base.HasAssetChanged();
+    }
+
+    public override bool HasMissingProviderURL() =>
+        Provider?.Data is IStaticAssetProvider staticProvider && staticProvider.URL == null;
+
+    public override bool CanRetryMissingProviderURL() =>
+        Source != null && Provider != null && HasMissingProviderURL();
+
+    protected override void ClearProviderURL()
+    {
+        if (Provider?.Data is IStaticAssetProvider staticProvider)
+            staticProvider.URL = null;
     }
 
     protected override ulong GetAssetTimestamp()

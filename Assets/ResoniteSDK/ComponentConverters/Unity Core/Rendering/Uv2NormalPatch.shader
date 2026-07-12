@@ -13,6 +13,25 @@
 // Built-in RP shader (uses UnityCG.cginc), same style as LightmapDecode.shader in this same
 // folder. Only ever driven by CommandBuffer.DrawMesh into an offscreen RenderTexture from Editor
 // tooling code — never assigned to a renderer, so URP/HDRP compatibility is not a concern.
+//
+// 2026-07-12 bugfix (バグハンター指摘, ダイダロス対応): vert() below used to additionally flip its
+// own manually-built clip-space Y by `_ProjectionParams.x`, attempting to hand-replicate Unity's
+// automatic per-platform Blit-quad Y-orientation compensation. That's unreliable here:
+// `_ProjectionParams` is populated by Unity's camera pipeline (SetupCameraProperties) for
+// whichever camera is CURRENTLY rendering, and this pass has no camera at all — it's driven by
+// Graphics.ExecuteCommandBuffer against an offscreen target with no SetViewProjectionMatrices
+// call either — so the value actually read here was leftover global shader state from whatever
+// last rendered a real camera (e.g. the Scene/Game view), not something meaningfully tied to THIS
+// render target. This is the same class of silent orientation bug this feature's
+// DirectionalLightmapBaker.cs already found (three times) for its own color/dir atlas readback.
+//
+// Fixed by removing the manual flip attempt from this shader entirely: this pass now writes its
+// raw, UNCOMPENSATED clip-space output, and DirectionalLightmapBaker.RenderUv2NormalPatch instead
+// routes the resulting RenderTexture through BlitReadableAtlas — the SAME already-proven
+// (real-machine, luminance-correlation-verified) RawPassthroughBlit.shader + UnityObjectToClipPos
+// Blit-quad readback DirectionalLightmapBaker.cs already uses for the directional lightmap
+// texture — instead of a second, independent, never-verified guess at the same correction. See
+// RenderUv2NormalPatch's own doc comment (DirectionalLightmapBaker.cs) for the full reasoning.
 Shader "ResoniteSDK/Internal/Uv2NormalPatch"
 {
     SubShader
@@ -57,16 +76,14 @@ Shader "ResoniteSDK/Internal/Uv2NormalPatch"
                 // there is no camera involved; the render target IS the UV parameterization
                 // (this pass covers exactly one renderer's own lightmap tile, at that tile's own
                 // pixel dimensions — see DirectionalLightmapBaker.RenderUv2NormalPatch).
+                //
+                // 2026-07-12 bugfix (バグハンター指摘): deliberately NO per-platform Y-flip here
+                // anymore (see this file's own header comment) — this pass's raw, uncompensated
+                // clip-space output is intentional; DirectionalLightmapBaker.RenderUv2NormalPatch
+                // applies the actual (proven) orientation correction downstream via
+                // BlitReadableAtlas instead of this shader guessing at it with no camera context.
                 float2 ndc = v.uv2 * 2.0 - 1.0;
-
-                // _ProjectionParams.x is 1 or -1 depending on whether the currently active render
-                // target needs its clip-space Y flipped (ildasm/CGIncludes-confirmed doc comment
-                // on _ProjectionParams in UnityShaderVariables.cginc: "x = 1 or -1 (-1 if
-                // projection is flipped)") — required here so a later plain 0..1 UV read of the
-                // resulting texture lines up texel-for-texel with the same UV2 <-> pixel mapping
-                // the shared atlas color/dir textures already use (same platform-Y-flip idiom
-                // used by any offscreen UV-space bake, e.g. decal/lightmap tooling).
-                o.vertex = float4(ndc.x, ndc.y * _ProjectionParams.x, 0.5, 1.0);
+                o.vertex = float4(ndc.x, ndc.y, 0.5, 1.0);
 
                 o.worldNormal = UnityObjectToWorldNormal(v.normal);
                 return o;

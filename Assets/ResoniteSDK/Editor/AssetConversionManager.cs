@@ -89,7 +89,19 @@ public class AssetConversionManager
                 continue;
             }
 
-            map.Add(new AssetMap<TUnity>(converter.Source, converter.PostProcessor), converter);
+            var key = new AssetMap<TUnity>(converter.Source, converter.PostProcessor);
+
+            if (map.TryGetValue(key, out var existing))
+            {
+                if (existing.HasMissingProviderURL() && !converter.HasMissingProviderURL())
+                    map[key] = converter;
+
+                Debug.LogWarning($"[ResoniteSDK] Duplicate asset converter found for {converter.Source.name}. " +
+                    "Keeping one converter and ignoring the duplicate during scan.");
+                continue;
+            }
+
+            map.Add(key, converter);
         }
     }
 
@@ -119,6 +131,39 @@ public class AssetConversionManager
         // Since we're running a new conversion batch, we need to re-check all the converters again, because the assets
         // might have changed.
         _checkedConverters.Clear();
+    }
+
+    public int ScheduleMissingAssetURLRetries()
+    {
+        if (AssetsRoot == null)
+            return 0;
+
+        int scheduled = 0;
+
+        foreach (var converter in AssetsRoot.GetComponentsInChildren<AssetConverter>(true))
+        {
+            if (converter == null || !converter.CanRetryMissingProviderURL())
+                continue;
+
+            if (_scheduledConversions.Contains(converter))
+                continue;
+
+            _scheduledConversions.Enqueue(converter);
+            _updatedAssetProviderRoots.Add(converter.transform);
+            scheduled++;
+        }
+
+        return scheduled;
+    }
+
+    public int RetryMissingAssetURLs(LinkInterface link)
+    {
+        var scheduled = ScheduleMissingAssetURLRetries();
+
+        if (scheduled > 0)
+            ProcessConversions(link);
+
+        return scheduled;
     }
 
     public bool HasMesh(UnityEngine.Mesh mesh, AssetMessagePostProcessor postProcessor = null) =>
@@ -252,13 +297,28 @@ public class AssetConversionManager
 
             while (_scheduledConversions.Count > 0)
             {
+                if (link == null || !link.IsConnected)
+                {
+                    throw new InvalidOperationException("Asset conversion stopped because ResoniteLink is no longer connected. Reconnect and run Send Current Scene again; conversion state will be rebuilt.");
+                }
+
                 var progress = (totalToConvert - _scheduledConversions.Count) / (float)totalToConvert;
 
                 var job = _scheduledConversions.Dequeue();
 
                 EditorUtility.DisplayProgressBar("Converting assets...", $"{job.AssetClass}: {job.AssetName}", progress);
 
-                job.Convert(Converter, link);
+                try
+                {
+                    job.Convert(Converter, link);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        $"Asset conversion stopped while converting {job.AssetClass} {job.AssetName}. ResoniteLink likely disconnected during asset upload. " +
+                        "Reconnect and run Send Current Scene again; conversion state will be rebuilt.",
+                        ex);
+                }
             }
 
             // Once conversions are processed, clear this. This is only relevant before the conversions take place
