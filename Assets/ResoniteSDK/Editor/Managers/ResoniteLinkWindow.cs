@@ -163,6 +163,9 @@ public class ResoniteLinkWindow : EditorWindow
             SendMaterialsOnly();
         EditorGUILayout.EndHorizontal();
 
+        if (GUILayout.Button("Send Lightmaps Only"))
+            SendLightmapsOnly();
+
         if (GUILayout.Button("Retry Missing Asset URLs"))
             RetryMissingAssetURLs();
 
@@ -253,6 +256,13 @@ public class ResoniteLinkWindow : EditorWindow
         EnsureConverter();
 
         _converter.ConvertMaterialsOnly();
+    }
+
+    public void SendLightmapsOnly()
+    {
+        EnsureConverter();
+
+        _converter.ConvertLightmapsOnly();
     }
 
     void RetryMissingAssetURLs()
@@ -352,8 +362,45 @@ public class ResoniteLinkWindow : EditorWindow
 
     void ResetConversionState()
     {
+        // 2026-07-14 バグ修正（Tanossy指摘）: これまでは _converter を作り直すだけで、
+        // Unityシーン内に既に存在する __UnityAssets / __UnitySkybox ルート配下の変換器
+        // (Texture2DConverter/MeshConverter/AudioClipConverter等、AssetConversionManagerの
+        // コンストラクタが「同名ルートがあれば中身をスキャンして再利用する」設計になっている)
+        // がそのまま生き残っていた。
+        //
+        // これらの変換器は「前回のセッション」が発行したIDを保持したままなので、新しいセッション
+        // (UniqueSessionIdが変わった、あるいは接続が壊れて再接続した場合)から見ると存在しない
+        // コンポーネントを指すことになり、"Component with ID '...' not found" のような更新失敗を
+        // 引き起こす。シーン階層側の変換器も同様の理由でセッションをまたいで複製されうる。
+        //
+        // 修正: 新しいセッションを認識してリセットする際は、司令塔(_converter)を作り直すだけで
+        // なく、既存の変換器コンポーネント一式(シーン階層側+アセット側の両方)も破棄し、
+        // 次の変換が完全にクリーンな状態から始まるようにする。
+        CleanupConverters();
+        CleanupReosniteComponents();
+        CleanupAssetConversionRoots();
+
         _converter = null;
         EnsureConverter();
+    }
+
+    // __UnityAssets / __UnitySkybox は「同名のGameObjectが既にあれば中身を再利用する」設計
+    // (AssetConversionManagerのコンストラクタ、SkyboxConverter.EnsureRoot()) のため、
+    // CleanupConverters()/CleanupReosniteComponents()で個々のコンポーネントを消すだけでなく、
+    // ルートGameObjectごと破棄しないと「空の器に前回セッションの変換器が再度スキャンされて
+    // 蘇る」事故を防げない。
+    void CleanupAssetConversionRoots()
+    {
+        var roots = SceneManager.GetActiveScene().GetRootGameObjects();
+
+        foreach (var root in roots)
+        {
+            if (root.name == AssetConversionManager.ASSETS_ROOT_NAME ||
+                root.name == SkyboxConverter.SKYBOX_ROOT_NAME)
+            {
+                DestroyImmediate(root);
+            }
+        }
     }
 
     string ConnectButtonLabel => State switch

@@ -36,6 +36,17 @@ public class SceneConverter : IConversionContext
     [SerializeField]
     HashSet<Transform> _existingSlots = new HashSet<Transform>();
 
+    // 2026-07-14: 単一の中間親スロット。Unity側の全ルートオブジェクトはワールドRootへ直接では
+    // なく、このスロットの下にまとめて送る（実Unity Transformを持たない合成スロットなので
+    // _transformMapでは追跡できず、専用フィールドで持つ）。
+    [SerializeField]
+    ResoniteLink.Slot _importRootSlot;
+
+    [SerializeField]
+    bool _importRootSlotAdded;
+
+    public const string ImportRootSlotName = "Unity Import";
+
     [SerializeField]
     Dictionary<IWorldElement, string> _elementToId = new Dictionary<IWorldElement, string>();
 
@@ -246,6 +257,11 @@ public class SceneConverter : IConversionContext
         ConvertScene(ResoniteSdkConversionPass.MaterialsOnly);
     }
 
+    public void ConvertLightmapsOnly()
+    {
+        ConvertScene(ResoniteSdkConversionPass.LightmapsOnly);
+    }
+
     void ConvertScene(ResoniteSdkConversionPass pass)
     {
         if (pass != ResoniteSdkConversionPass.MeshesOnly && ForceRefreshGeneratedLightmaps)
@@ -291,6 +307,12 @@ public class SceneConverter : IConversionContext
             {
                 var messages = new List<DataModelOperation>();
 
+                // 2026-07-14: このパスは Convert(IEnumerable<Transform> roots) を経由せず
+                // 直接 Convert/ConvertHierarchy を呼ぶため、_importRootSlot が未初期化の
+                // ままだと GatherTransformData の `_importRootSlot.ID` 参照でNPEになる。
+                // 冪等なので毎回呼んでおけば安全。
+                EnsureImportRootSlot(messages);
+
                 Convert(_assetConverter.AssetsRoot, messages);
 
                 foreach (var root in _assetConverter.UpdatedAssetProviderRoots)
@@ -322,6 +344,16 @@ public class SceneConverter : IConversionContext
                 UpdateComponentConversions(root);
 
             var messages = new List<DataModelOperation>();
+
+            // 2026-07-14 バグ修正（Tanossy指摘）: 以前はUnityの各ルートGameObject
+            // (Lighting/Structure/__UnityAssets/__UnitySkybox等、それぞれ独立したUnityシーン
+            // ルート)を、直接ResoniteのワールドRoot直下の子として送っていた
+            // (GatherTransformDataの `transform.parent == null -> TargetID = "Root"`)。
+            // このため世界のRoot直下に変換由来の複数の塊がバラバラに増えていき、
+            // セッションが変わる度に複製されても「どれが自分の出力か」を判別・掃除するのが
+            // 困難だった。単一の中間親スロット(ImportRootSlotName)を用意し、Unity側の全ルートを
+            // その下にまとめることで、掃除は「この1つの名前のスロットを消すだけ」で済むようにする。
+            EnsureImportRootSlot(messages);
 
             foreach (var root in roots)
                 ConvertHierarchy(root, messages);
@@ -475,6 +507,7 @@ public class SceneConverter : IConversionContext
 
         // Filter out the converters or the converted components, those don't need to be converted!
         components.RemoveAll(c => c == null || c is ResoniteComponentConverter || c is ResoniteComponent);
+        components.RemoveAll(c => !ShouldUpdateUnityComponentForActivePass(c));
 
         // Get converters for all the types we have
         var converters = new Dictionary<UnityEngine.Component, ConverterInfo>();
@@ -553,6 +586,13 @@ public class SceneConverter : IConversionContext
     {
         AddUpdateSlotData message;
 
+        // 2026-07-14: 全エントリポイント（通常のConvert/RetryMissingAssetURLs/リアルタイム同期の
+        // TransformUpdated）がここを通るので、トップレベルのUnityルートを扱う直前に必ず
+        // _importRootSlot の存在を保証しておく。EnsureImportRootSlot は冪等なので、他の呼び出し元で
+        // 既に呼ばれていても無害。
+        if (transform.parent == null)
+            EnsureImportRootSlot(messages);
+
         var slot = GetLinkSlot(transform);
 
         if (_existingSlots.Add(transform))
@@ -571,6 +611,55 @@ public class SceneConverter : IConversionContext
         message.Data = slot;
 
         messages.Add(message);
+    }
+
+    // Ensures the single "Unity Import" wrapper slot exists (creating it the first time this
+    // SceneConverter instance runs a conversion, updating it on subsequent calls within the same
+    // session), queues its Add/UpdateSlot message, and returns its ID so top-level Unity
+    // transforms can target it as their parent instead of the world's literal "Root".
+    // See the 2026-07-14 comment in Convert(IEnumerable<Transform>) for why this exists.
+    string EnsureImportRootSlot(List<DataModelOperation> messages)
+    {
+        if (_importRootSlot == null)
+        {
+            _importRootSlot = new ResoniteLink.Slot();
+
+            _importRootSlot.ID = AllocateId();
+            _importRootSlot.Parent = new Reference() { ID = AllocateId() };
+            _importRootSlot.Position = new Field_float3() { ID = AllocateId() };
+            _importRootSlot.Rotation = new Field_floatQ() { ID = AllocateId() };
+            _importRootSlot.Scale = new Field_float3() { ID = AllocateId() };
+            _importRootSlot.Name = new Field_string() { ID = AllocateId() };
+            _importRootSlot.Tag = new Field_string() { ID = AllocateId() };
+            _importRootSlot.IsActive = new Field_bool() { ID = AllocateId() };
+        }
+
+        _importRootSlot.Parent.TargetID = "Root";
+        _importRootSlot.Position.Value = Vector3.zero.ToResoniteLink();
+        _importRootSlot.Rotation.Value = Quaternion.identity.ToResoniteLink();
+        _importRootSlot.Scale.Value = Vector3.one.ToResoniteLink();
+        _importRootSlot.Name.Value = ImportRootSlotName;
+        _importRootSlot.Tag.Value = null;
+        _importRootSlot.IsActive.Value = true;
+
+        AddUpdateSlotData message;
+
+        if (!_importRootSlotAdded)
+        {
+            message = new AddSlot();
+            message.MessageID = GetUniqueMessageId($"AddSlot_{ImportRootSlotName}");
+            _importRootSlotAdded = true;
+        }
+        else
+        {
+            message = new UpdateSlot();
+            message.MessageID = GetUniqueMessageId($"UpdateSlot_{ImportRootSlotName}");
+        }
+
+        message.Data = _importRootSlot;
+        messages.Add(message);
+
+        return _importRootSlot.ID;
     }
 
     ResoniteLink.Slot GetLinkSlot(Transform transform)
@@ -598,8 +687,11 @@ public class SceneConverter : IConversionContext
 
     void GatherTransformData(Transform transform, ResoniteLink.Slot data)
     {
+        // 2026-07-14: top-level Unity roots now parent under the single "Unity Import" wrapper
+        // slot (see EnsureImportRootSlot) instead of the world's literal "Root", so all of our
+        // converted content lives under one well-known, easy-to-clean-up container.
         if (transform.parent == null)
-            data.Parent.TargetID = "Root";
+            data.Parent.TargetID = _importRootSlot.ID;
         else
             data.Parent.TargetID = _transformMap[transform.parent].ID;
 
@@ -623,6 +715,9 @@ public class SceneConverter : IConversionContext
 
         foreach (var c in components)
         {
+            if (!ShouldSendResoniteComponentForActivePass(c))
+                continue;
+
             var data = c.CollectData(this);
 
             if (_existingComponents.TryAdd(c, c.transform))
@@ -653,6 +748,70 @@ public class SceneConverter : IConversionContext
                 messages.Add(updateComponent);
             }
         }
+    }
+
+    bool ShouldUpdateUnityComponentForActivePass(UnityEngine.Component component)
+    {
+        switch (ActiveConversionPass)
+        {
+            case ResoniteSdkConversionPass.MeshesOnly:
+                return component is UnityEngine.MeshRenderer ||
+                    component is UnityEngine.SkinnedMeshRenderer ||
+                    component is UnityEngine.MeshCollider ||
+                    component is UnityEngine.ParticleSystem;
+
+            case ResoniteSdkConversionPass.MaterialsOnly:
+                return component is UnityEngine.MeshRenderer ||
+                    component is UnityEngine.SkinnedMeshRenderer;
+
+            case ResoniteSdkConversionPass.LightmapsOnly:
+                return IsLightmappedMeshRenderer(component);
+
+            default:
+                return true;
+        }
+    }
+
+    bool ShouldSendResoniteComponentForActivePass(ResoniteComponent component)
+    {
+        switch (ActiveConversionPass)
+        {
+            case ResoniteSdkConversionPass.MeshesOnly:
+                return component is FrooxEngine.MeshRendererWrapper ||
+                    component is FrooxEngine.SkinnedMeshRendererWrapper ||
+                    component is FrooxEngine.MeshColliderWrapper ||
+                    component is FrooxEngine.ConvexHullColliderWrapper ||
+                    component.GetComponent<MeshConverter>() != null;
+
+            case ResoniteSdkConversionPass.MaterialsOnly:
+                return component is FrooxEngine.MeshRendererWrapper ||
+                    component is FrooxEngine.SkinnedMeshRendererWrapper ||
+                    component.GetComponent<ResoniteMaterialConverter>() != null ||
+                    component.GetComponent<Texture2DConverter>() != null ||
+                    component.GetComponent<CubemapConverter>() != null;
+
+            case ResoniteSdkConversionPass.LightmapsOnly:
+                return component is FrooxEngine.MeshRendererWrapper ||
+                    component.GetComponent<BakedLightmapStandardConverter>() != null ||
+                    IsGeneratedLightmapTextureConverter(component.GetComponent<Texture2DConverter>());
+
+            default:
+                return true;
+        }
+    }
+
+    static bool IsLightmappedMeshRenderer(UnityEngine.Component component)
+    {
+        return component is UnityEngine.MeshRenderer renderer &&
+            renderer.lightmapIndex >= 0 &&
+            renderer.lightmapIndex < LightmapSettings.lightmaps.Length;
+    }
+
+    static bool IsGeneratedLightmapTextureConverter(Texture2DConverter converter)
+    {
+        return converter != null &&
+            converter.Source != null &&
+            converter.Source.name.StartsWith("LMTex_", StringComparison.OrdinalIgnoreCase);
     }
 
     void ObjectChangeEvents_changesPublished(ref ObjectChangeEventStream stream)
