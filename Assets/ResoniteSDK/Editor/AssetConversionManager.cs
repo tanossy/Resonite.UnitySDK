@@ -14,14 +14,42 @@ public struct AssetMap<A> : IEquatable<AssetMap<A>>
     public readonly A Asset;
     public readonly AssetMessagePostProcessor PostProcessor;
 
+    // 2026-07-14 (Tanossy指摘): 元々はAsset(Unityオブジェクト参照)そのもので同一性を判定していた。
+    // これだと ForceRefreshGeneratedLightmaps 等でファイルを削除→同じパスに再生成した場合、
+    // 中身は同じ論理アセットでもUnity側の参照は別物になるため辞書照合が必ずミスし、
+    // 既存のConverter(=既存のResonite側ID)を見つけられず毎回新規Slot/Component/IDを
+    // 追加してしまう(=送信の度に重複が増える)。アセットパスが取れる場合はパスを安定キーとして
+    // 使い、同じパスへの再生成を「同一アセットの内容更新」として認識できるようにする。
+    // プロシージャル生成物(パスを持たない)は従来通り参照ベースにフォールバックする。
+    readonly string _path;
+
     public AssetMap(A asset, AssetMessagePostProcessor postProcessor)
     {
         this.Asset = asset;
         PostProcessor = postProcessor;
+
+        var path = asset != null ? AssetDatabase.GetAssetPath(asset) : null;
+        _path = string.IsNullOrEmpty(path) ? null : path;
     }
 
-    public bool Equals(AssetMap<A> other) => Asset == other.Asset && PostProcessor == other.PostProcessor;
-    public override int GetHashCode() => HashCode.Combine(Asset, PostProcessor);
+    public bool Equals(AssetMap<A> other)
+    {
+        if (PostProcessor != other.PostProcessor)
+            return false;
+
+        if (_path != null && other._path != null)
+            return _path == other._path;
+
+        // At least one side has no stable path (procedural asset, or one/both sides null) -
+        // only a path-vs-no-path pairing can never match here (intentional: a procedural asset
+        // must never accidentally alias a persisted one), so fall back to reference identity.
+        return _path == null && other._path == null && Asset == other.Asset;
+    }
+
+    public override int GetHashCode() =>
+        _path != null
+            ? HashCode.Combine(_path, PostProcessor)
+            : HashCode.Combine(Asset, PostProcessor);
 }
 
 public class AssetConversionManager
@@ -222,11 +250,23 @@ public class AssetConversionManager
 
             converters.Add(identity, converter);
         }
-        else if (_checkedConverters.Add(converter) && converter.HasAssetChanged())
+        else
         {
-            // We haven't checked this conversion yet for updates and the asset has changed
-            // so we need to run the conversion again to update the data
-            needsToConvert = true;
+            // 2026-07-14: identity matched by stable asset path even though the live Unity object
+            // reference may differ (e.g. the asset was deleted and regenerated at the same path -
+            // see AssetMap's doc comment). Re-point the converter at the current live object before
+            // checking for changes, both so HasAssetChanged() isn't evaluating a stale/destroyed
+            // reference, and so the resulting update targets the ALREADY-SENT Resonite-side
+            // component (UpdateComponent) instead of us spawning a duplicate.
+            if (!ReferenceEquals(converter.Source, unity))
+                converter.Source = unity;
+
+            if (_checkedConverters.Add(converter) && converter.HasAssetChanged())
+            {
+                // We haven't checked this conversion yet for updates and the asset has changed
+                // so we need to run the conversion again to update the data
+                needsToConvert = true;
+            }
         }
 
         if (needsToConvert)

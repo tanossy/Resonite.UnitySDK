@@ -68,7 +68,15 @@ public static class LightmapDecoder
 
     // ResoniteLink can drop the WebSocket while importing very large decoded lightmap PNGs. Keep
     // this preview export small enough for reliable send/retry while preserving the same atlas UVs.
-    public static int MaxPreviewTextureSize = 256;
+    //
+    // 2026-07-14 (Tanossy指摘の追加調査): 256でも複数回切断が再発したため、根本原因をResoniteLink.dll
+    // (Plugins/ResoniteLink.dll, LinkInterface.cs相当・逆コンパイルで確認)側の未同期レースコンディション
+    // まで特定した。SendMessageの送信中(_client.SendAsync)と、別バックグラウンドTaskで動く
+    // ReceiverHandlerのエラー時_client.Dispose()が同じ_clientを介して競合しており、送信が長引くほど
+    // 「受信側で何か起きて負ける」窓が広がる。DLL自体は現行upstream/mainと同一(LFSハッシュ一致済み、
+    // パッチ不可)なのでUnity側で直接直せる余地はなく、ペイロードを縮めて送信時間=競合窓を短くするのが
+    // 現実的な緩和策。64に縮小(256の1/16の画素数)。
+    public static int MaxPreviewTextureSize = 64;
 
     /// <summary>
     /// Clears the in-memory decoded-lightmap front cache. Called from
