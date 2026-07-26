@@ -376,8 +376,18 @@ public class ResoniteLinkWindow : EditorWindow
         // 修正: 新しいセッションを認識してリセットする際は、司令塔(_converter)を作り直すだけで
         // なく、既存の変換器コンポーネント一式(シーン階層側+アセット側の両方)も破棄し、
         // 次の変換が完全にクリーンな状態から始まるようにする。
+        //
+        // 2026-07-15 (実機で"Destroying object multiple times"警告多発を確認・修正):
+        // CleanupReosniteComponents()は元々ここに含めていたが、実質的に完全に冗長だった。
+        // シーン階層側のResoniteComponentは全てResoniteComponentConverter.OnDestroy()→
+        // Cleanup()→DestroyImmediate(Binding)の連鎖で既に破棄済み(CleanupConverters()の
+        // DestroyImmediate(converter)がこの連鎖を毎回トリガーする)。アセット側の
+        // ResoniteComponent(Provider)も、CleanupAssetConversionRoots()が__UnityAssets/
+        // __UnitySkybox自体をまるごと破棄する時点で子ごと巻き込まれて消える。同じ
+        // コンポーネントをCleanupReosniteComponents()が独自にGetComponentsInChildren<
+        // ResoniteComponent>()で拾い直し、既に(連鎖/親破棄で)破棄済みのものへもう一度
+        // DestroyImmediateしようとしていたため二重破棄警告が出ていた。
         CleanupConverters();
-        CleanupReosniteComponents();
         CleanupAssetConversionRoots();
 
         _converter = null;
