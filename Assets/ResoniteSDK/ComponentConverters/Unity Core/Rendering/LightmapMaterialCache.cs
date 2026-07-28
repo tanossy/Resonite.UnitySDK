@@ -103,6 +103,15 @@ public static class LightmapMaterialCache
     //   "Standard_Culloff" - Assets/sameR&D/Shader/Standard_Culloff.shader (2026-07-12): same
     //     verification, same result (double-sided/cull-off variant of Standard with an otherwise
     //     identical property block).
+    //   "Autodesk Interactive" - Unity's own built-in shader (2026-07-27, verified live via
+    //     UnityEditor.ShaderUtil.GetPropertyName/GetPropertyCount against the actual installed
+    //     shader, not assumed): declares _Color/_MainTex/_Cutoff/_Glossiness/_Metallic/
+    //     _MetallicGlossMap/_BumpScale/_BumpMap/_Parallax/_ParallaxMap/_OcclusionMap/
+    //     _EmissionColor/_EmissionMap/_Mode under the identical names this file reads. This is
+    //     Unity's own default fallback shader assigned by the FBX importer to materials with no
+    //     explicit shader baked in - very common across off-the-shelf asset-store 3D packs (this
+    //     was found affecting most furniture materials in the "simple room SGB" test scene), so
+    //     this is not a one-off addition.
     // Do NOT add a shader here on assumption alone - a mismatched property name would silently
     // read/write the wrong value (e.g. GetFloat on a missing property returns 0, which is
     // indistinguishable from a legitimately-set 0). Confirm against the shader's actual
@@ -117,6 +126,7 @@ public static class LightmapMaterialCache
         "Standard",
         "Silent/Filamented",
         "Standard_Culloff",
+        "Autodesk Interactive",
     };
 
     // Session-scoped memory front-cache for lightmap-variant Material assets, keyed by asset path.

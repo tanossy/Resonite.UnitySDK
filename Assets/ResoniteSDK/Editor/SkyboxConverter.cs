@@ -29,8 +29,18 @@ public class SkyboxConverter
         if (SkyboxRoot != null)
             return;
 
-        // Try to get the root from the current components if they exist
-        SkyboxRoot = Skybox?.gameObject ?? AmbientLight?.gameObject ?? ReflectionProbe?.gameObject;
+        // 2026-07-27 バグ修正（実機で発覚）: Skybox/AmbientLight/ReflectionProbeがUnityの
+        // "fake null"(ネイティブ側は破棄済みだがC#参照はnullでない)状態の時、`?.`(C#のnull条件演算子)
+        // はUnityのoperator==オーバーロードを経由しないため、`.gameObject`アクセスが
+        // MissingReferenceExceptionを投げる。CleanupAssetConversionRoots()が__UnitySkyboxを
+        // まるごと破棄した後にドメインリロードでこのフィールドが復元されるケース等で発生確認済み。
+        // Unity対応の`!= null`チェックを個別に行うことで、破棄済み参照を安全にスキップする。
+        if (Skybox != null)
+            SkyboxRoot = Skybox.gameObject;
+        else if (AmbientLight != null)
+            SkyboxRoot = AmbientLight.gameObject;
+        else if (ReflectionProbe != null)
+            SkyboxRoot = ReflectionProbe.gameObject;
 
         if(SkyboxRoot == null)
         {

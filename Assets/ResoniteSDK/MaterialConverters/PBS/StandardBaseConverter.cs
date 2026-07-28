@@ -69,23 +69,25 @@ public abstract class StandardBaseConverter<TWrapper, TMaterial> : ResoniteMater
 
         data.AlphaCutoff = GetFloatOrDefault(material, "_Cutoff");
 
-        data.AlbedoColor = GetColorOrDefault(material, "_Color", Color.white).ToColorX_sRGB();
-        data.AlbedoTexture = context.GetITexture2D(material.mainTexture);
+        var uploadSourceTextures = ConversionPassState.ShouldUploadSourceMaterialTextures;
+
+        data.AlbedoColor = ColorGradingApproximation.Apply(GetColorOrDefault(material, "_Color", Color.white)).ToColorX_sRGB();
+        data.AlbedoTexture = uploadSourceTextures ? context.GetITexture2D(material.mainTexture) : null;
         data.TextureScale = material.mainTextureScale;
         data.TextureOffset = material.mainTextureOffset;
 
-        data.NormalMap = context.GetITexture2D(GetTextureOrDefault(material, "_BumpMap"));
+        data.NormalMap = uploadSourceTextures ? context.GetITexture2D(GetTextureOrDefault(material, "_BumpMap")) : null;
         data.NormalScale = GetFloatOrDefault(material, "_BumpScale", 1f);
 
         data.HeightScale = GetFloatOrDefault(material, "_Parallax");
-        data.HeightMap = context.GetITexture2D(GetTextureOrDefault(material, "_ParallaxMap"));
+        data.HeightMap = uploadSourceTextures ? context.GetITexture2D(GetTextureOrDefault(material, "_ParallaxMap")) : null;
 
-        data.OcclusionMap = context.GetITexture2D(GetTextureOrDefault(material, "_OcclusionMap"));
+        data.OcclusionMap = uploadSourceTextures ? context.GetITexture2D(GetTextureOrDefault(material, "_OcclusionMap")) : null;
 
         if (material.IsKeywordEnabled("_EMISSION"))
         {
-            data.EmissiveColor = GetColorOrDefault(material, "_EmissionColor", Color.black).ToColorX_sRGB();
-            data.EmissiveMap = context.GetITexture2D(GetTextureOrDefault(material, "_EmissionMap"));
+            data.EmissiveColor = ColorGradingApproximation.Apply(GetColorOrDefault(material, "_EmissionColor", Color.black)).ToColorX_sRGB();
+            data.EmissiveMap = uploadSourceTextures ? context.GetITexture2D(GetTextureOrDefault(material, "_EmissionMap")) : null;
         }
         else
         {

@@ -18,9 +18,18 @@ public struct AssetMap<A> : IEquatable<AssetMap<A>>
     // これだと ForceRefreshGeneratedLightmaps 等でファイルを削除→同じパスに再生成した場合、
     // 中身は同じ論理アセットでもUnity側の参照は別物になるため辞書照合が必ずミスし、
     // 既存のConverter(=既存のResonite側ID)を見つけられず毎回新規Slot/Component/IDを
-    // 追加してしまう(=送信の度に重複が増える)。アセットパスが取れる場合はパスを安定キーとして
-    // 使い、同じパスへの再生成を「同一アセットの内容更新」として認識できるようにする。
-    // プロシージャル生成物(パスを持たない)は従来通り参照ベースにフォールバックする。
+    // 追加してしまう(=送信の度に重複が増える)。
+    //
+    // 2026-07-27 バグ修正（実機で発覚・Tanossy指摘）: アセットパスだけをキーにしていたのが誤りだった。
+    // FBX等からインポートされた「同一ファイル内の複数サブアセット」(例: 1つの.fbxに入っている
+    // Cube/curtain low poly/Cylinder.003/Plane等、別々のMeshオブジェクト)は全て同じ
+    // AssetDatabase.GetAssetPath()を返す(コンテナファイルのパス)。パスだけで同一性判定すると、
+    // 中身が全く違う複数のメッシュが「同じアセット」と誤認され、後から変換されたサブアセットが
+    // 既存のConverterのSourceを上書きしてしまい、全オブジェクトが同じ1つのメッシュを指すという
+    // 実害(形・テクスチャが完全に別物になる)が実機で確認された。GUID+ローカルファイルID
+    // (Unityがファイル内の各サブアセットに割り振る安定IDのペア)をキーにすることで、
+    // 「同じファイルへの再生成」と「同じファイル内の別サブアセット」を正しく区別する。
+    // プロシージャル生成物(GUID/パスを持たない)は従来通り参照ベースにフォールバックする。
     readonly string _path;
 
     public AssetMap(A asset, AssetMessagePostProcessor postProcessor)
@@ -28,8 +37,15 @@ public struct AssetMap<A> : IEquatable<AssetMap<A>>
         this.Asset = asset;
         PostProcessor = postProcessor;
 
-        var path = asset != null ? AssetDatabase.GetAssetPath(asset) : null;
-        _path = string.IsNullOrEmpty(path) ? null : path;
+        if (asset != null && AssetDatabase.TryGetGUIDAndLocalFileIdentifier(asset, out var guid, out long localId)
+            && !string.IsNullOrEmpty(guid))
+        {
+            _path = $"{guid}:{localId}";
+        }
+        else
+        {
+            _path = null;
+        }
     }
 
     public bool Equals(AssetMap<A> other)
