@@ -29,12 +29,14 @@ public class SkyboxConverter
         if (SkyboxRoot != null)
             return;
 
-        // 2026-07-27 バグ修正（実機で発覚）: Skybox/AmbientLight/ReflectionProbeがUnityの
-        // "fake null"(ネイティブ側は破棄済みだがC#参照はnullでない)状態の時、`?.`(C#のnull条件演算子)
-        // はUnityのoperator==オーバーロードを経由しないため、`.gameObject`アクセスが
-        // MissingReferenceExceptionを投げる。CleanupAssetConversionRoots()が__UnitySkyboxを
-        // まるごと破棄した後にドメインリロードでこのフィールドが復元されるケース等で発生確認済み。
-        // Unity対応の`!= null`チェックを個別に行うことで、破棄済み参照を安全にスキップする。
+        // 2026-07-27 bug fix (discovered on the live client): when Skybox/AmbientLight/
+        // ReflectionProbe are in Unity's "fake null" state (the native side has been destroyed
+        // but the C# reference itself is not null), `?.` (C#'s null-conditional operator) doesn't
+        // go through Unity's operator== overload, so the `.gameObject` access throws a
+        // MissingReferenceException. Confirmed to occur, for example, when
+        // CleanupAssetConversionRoots() destroys __UnitySkybox entirely and this field then gets
+        // restored via a domain reload. Doing an explicit Unity-aware `!= null` check on each
+        // field safely skips over destroyed references.
         if (Skybox != null)
             SkyboxRoot = Skybox.gameObject;
         else if (AmbientLight != null)

@@ -14,22 +14,27 @@ public struct AssetMap<A> : IEquatable<AssetMap<A>>
     public readonly A Asset;
     public readonly AssetMessagePostProcessor PostProcessor;
 
-    // 2026-07-14 (Tanossy指摘): 元々はAsset(Unityオブジェクト参照)そのもので同一性を判定していた。
-    // これだと ForceRefreshGeneratedLightmaps 等でファイルを削除→同じパスに再生成した場合、
-    // 中身は同じ論理アセットでもUnity側の参照は別物になるため辞書照合が必ずミスし、
-    // 既存のConverter(=既存のResonite側ID)を見つけられず毎回新規Slot/Component/IDを
-    // 追加してしまう(=送信の度に重複が増える)。
+    // 2026-07-14 (per Tanossy's feedback): originally identity was determined by the Asset
+    // (the Unity object reference) itself. This meant that if a file was deleted and regenerated
+    // at the same path (e.g. via ForceRefreshGeneratedLightmaps), the underlying logical asset
+    // would be the same but the Unity-side reference would be a different object, so dictionary
+    // lookups would always miss, failing to find the existing Converter (i.e. the existing
+    // Resonite-side ID) and instead adding a brand-new Slot/Component/ID every time (i.e.
+    // duplicates piling up on every send).
     //
-    // 2026-07-27 バグ修正（実機で発覚・Tanossy指摘）: アセットパスだけをキーにしていたのが誤りだった。
-    // FBX等からインポートされた「同一ファイル内の複数サブアセット」(例: 1つの.fbxに入っている
-    // Cube/curtain low poly/Cylinder.003/Plane等、別々のMeshオブジェクト)は全て同じ
-    // AssetDatabase.GetAssetPath()を返す(コンテナファイルのパス)。パスだけで同一性判定すると、
-    // 中身が全く違う複数のメッシュが「同じアセット」と誤認され、後から変換されたサブアセットが
-    // 既存のConverterのSourceを上書きしてしまい、全オブジェクトが同じ1つのメッシュを指すという
-    // 実害(形・テクスチャが完全に別物になる)が実機で確認された。GUID+ローカルファイルID
-    // (Unityがファイル内の各サブアセットに割り振る安定IDのペア)をキーにすることで、
-    // 「同じファイルへの再生成」と「同じファイル内の別サブアセット」を正しく区別する。
-    // プロシージャル生成物(GUID/パスを持たない)は従来通り参照ベースにフォールバックする。
+    // 2026-07-27 bug fix (discovered on the live client, per Tanossy's feedback): keying purely
+    // on the asset path turned out to be wrong too. "Multiple sub-assets within the same file"
+    // imported from things like FBX (e.g. separate Mesh objects such as Cube/curtain low
+    // poly/Cylinder.003/Plane all contained in a single .fbx) all return the same
+    // AssetDatabase.GetAssetPath() (the path of the container file). If identity is determined by
+    // path alone, several meshes with completely different contents get misidentified as "the
+    // same asset," and a sub-asset converted later overwrites the Source of an existing Converter -
+    // a real bug confirmed on the live client where all objects end up pointing at the same single
+    // mesh (shapes/textures becoming completely wrong). Keying on GUID + local file ID (the pair
+    // of stable IDs Unity assigns to each sub-asset within a file) correctly distinguishes between
+    // "the same file regenerated" and "a different sub-asset within the same file." Procedurally
+    // generated assets (which have no GUID/path) still fall back to reference-based identity as
+    // before.
     readonly string _path;
 
     public AssetMap(A asset, AssetMessagePostProcessor postProcessor)
@@ -347,15 +352,18 @@ public class AssetConversionManager
 
     public void ProcessConversions(LinkInterface link)
     {
-        // 2026-08-08 (Tanossy指摘): EditorUtility.DisplayProgressBar/ClearProgressBarをこのループから
-        // 完全に撤去した。このダイアログはUnity Editorのメインスレッド上でモーダル的なGUIイベント
-        // ポンプを伴うため、ちょうどこのループが呼ぶjob.Convert()内部の非同期WebSocket送信
-        // (Task.Run(...).Wait()でメインスレッドをブロックしつつ、別スレッドでSendAsync/ReceiverHandlerが
-        // 動く構造)と時間的に重なる。ResoniteLink.dll側の未同期レースコンディション
-        // (SendMessage送信中にReceiverHandlerが"no pending response with this ID"で誤爆し
-        // _client.Dispose()する既知バグ、2026-07-30ソース読解で確定済み)の再現条件を、ダイアログの
-        // 描画/イベント処理が意図せず広げている可能性を切り分けるため、SDK本来の送受信ロジックとは
-        // 無関係なこのUI要素を除去し、干渉源から切り離す。
+        // 2026-08-08 (per Tanossy's feedback): removed EditorUtility.DisplayProgressBar/
+        // ClearProgressBar from this loop entirely. This dialog involves a modal-like GUI event
+        // pump on the Unity Editor's main thread, which overlaps in time with the asynchronous
+        // WebSocket send inside job.Convert() called right here in this loop (a structure where
+        // Task.Run(...).Wait() blocks the main thread while SendAsync/ReceiverHandler run on a
+        // separate thread). To rule out the possibility that the dialog's rendering/event
+        // handling was inadvertently widening the reproduction window for an unsynchronized race
+        // condition on the ResoniteLink.dll side (a known bug, confirmed via source reading on
+        // 2026-07-30, where ReceiverHandler misfires with "no pending response with this ID"
+        // while SendMessage is in flight and calls _client.Dispose()), this UI element - which is
+        // unrelated to the SDK's core send/receive logic - was removed to eliminate it as a
+        // source of interference.
         while (_scheduledConversions.Count > 0)
         {
             if (link == null || !link.IsConnected)

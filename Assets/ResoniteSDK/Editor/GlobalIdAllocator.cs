@@ -1,14 +1,18 @@
-// 2026-08-08 (実機で発覚 / Tanossy指摘「外だしして」): UniqueSessionIdはResoniteLinkの
-// ハンドシェイクがサーバー側から割り当てる値で、こちら側で完全制御できない(再接続の仕方によっては
-// 同じ値が返ってくることが実機で確認された)。公式SDK(SceneConverter.cs)の従来のID採番カウンタは
-// SceneConverterインスタンス単位でリセットされていたため、UniqueSessionIdが変わらないまま
-// 新しいSceneConverterが作られると、ID生成が完全に前回と同じ文字列列("Unity_0__0"等)を再現し、
-// まだサーバー側に残っている前回の同名オブジェクトと衝突して"ID '...' is already in use"の
-// FATAL ERRORでコンバータがIsCorrupted状態に陥る実害があった。
+// 2026-08-08 (discovered on the live client / per Tanossy's feedback: "pull this out"):
+// UniqueSessionId is a value assigned by the server side during ResoniteLink's handshake, and we
+// have no full control over it (it was confirmed on the live client that, depending on how you
+// reconnect, the same value can be returned again). The official SDK's (SceneConverter.cs)
+// original ID-allocation counter was reset per SceneConverter instance, so if a new SceneConverter
+// was created while UniqueSessionId stayed the same, ID generation would reproduce the exact same
+// sequence of strings as last time (e.g. "Unity_0__0"), colliding with the previous run's
+// same-named object still present on the server side, causing a "ID '...' is already in use"
+// FATAL ERROR and dropping the converter into an IsCorrupted state - a real production bug.
 //
-// プロセス全体で単調増加するこのstaticカウンタに切り替えることで、SceneConverterが何度作り直
-// されようと、このUnity Editorプロセスの生存期間中は同じ番号が二度と生成されないことを保証する。
-// 公式SDK側の変更はSceneConverter.AllocateId()内の採番元をこのクラスへ差し替える1行だけ。
+// Switching to this process-wide monotonically increasing static counter guarantees that, no
+// matter how many times SceneConverter gets recreated, the same number will never be generated
+// twice for the lifetime of this Unity Editor process. The change on the official SDK side is
+// just a single line swapping the ID-generation source inside SceneConverter.AllocateId() over to
+// this class.
 public static class GlobalIdAllocator
 {
     static long _pool;

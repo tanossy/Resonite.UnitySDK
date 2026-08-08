@@ -315,8 +315,10 @@ public class ParticleSystemConverter : ResoniteComponentConverter<UnityEngine.Pa
             // scattered across a `length`-meter-tall volume (a real Unity asset had length=5,
             // i.e. a 5-METER spawn volume for a candle flame) — this was the root cause of the
             // original "particles stretched across the room" bug, confirmed against
-            // wiki.resonite.com/Component:ConeEmitter ("Height = 放出元のconeの高さ", i.e. Height
-            // is literally the emission volume's height, not a Unity-length passthrough).
+            // wiki.resonite.com/Component:ConeEmitter (its Japanese-language wiki text reads
+            // "Height = 放出元のconeの高さ", i.e. "Height = the height of the emission-source
+            // cone" — Height is literally the emission volume's height, not a Unity-length
+            // passthrough).
             case ParticleSystemShapeType.Cone:
             case ParticleSystemShapeType.ConeShell:
             case ParticleSystemShapeType.ConeVolume:

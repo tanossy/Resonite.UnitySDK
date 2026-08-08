@@ -1,36 +1,42 @@
 using UnityEngine;
 using UnityEngine.Rendering.PostProcessing;
 
-// 2026-08-08 (Tanossy指摘「反射のぎらつき・Reflection Probeが強すぎる」への対応、案2を選択):
-// Resonite(Renderite)は主カメラでColorGrading相当のポスト処理を一切行わない
-// (2026-07-30 Renderite.Unity.Renderer調査で確定済み: CameraPostprocessingManager.cs内に
-// "if (IsPrimary && item is ColorGrading) continue; // skip, it breaks things" という直接証拠あり)。
-// Unity側のPPv2による色調補正・トーンマッピングの効果を全く受けないため、ハイライト(反射・
-// グレア等)が生のまま出て「きつい」見た目になる。
+// 2026-08-08 (per Tanossy's feedback: "reflections are glaring, Reflection Probe intensity is too
+// strong", option 2 chosen):
+// Resonite (Renderite) does not apply any ColorGrading-equivalent post-processing on the main camera
+// (confirmed during the 2026-07-30 investigation of Renderite.Unity.Renderer: there is direct evidence
+// inside CameraPostprocessingManager.cs — the line
+// "if (IsPrimary && item is ColorGrading) continue; // skip, it breaks things"). Because Unity's PPv2
+// color grading / tonemapping effect is never applied on the Resonite side, highlights (reflections,
+// glare, etc.) come through raw and look "harsh".
 //
-// 本来はUnity側のトーンマップカーブを3D LUTへ焼き込みResonite公式のLUT Materialへ適用するのが
-// 理想だが、ResoniteLinkのAPIにTexture3Dインポートの手段が存在しない(2026-08-08確認、
-// ImportTexture2D/ImportCubemap/ImportMesh/ImportAudioClipはあるがImportTexture3D相当は無い)
-// ため実装不可能と判明。次善策として、Unity公式のPPv2パッケージソースを直接読んで確定させた
-// 実際の計算式を、マテリアル色(ColorGradingApproximation経由)とReflection Probe強度
-// (ReflectionProbeConverter経由)へ個別に適用することで近似する。
+// Ideally we would bake Unity's tonemap curve into a 3D LUT and apply it via Resonite's official LUT
+// Material, but there is no way to import a Texture3D through the ResoniteLink API (confirmed 2026-08-08:
+// ImportTexture2D/ImportCubemap/ImportMesh/ImportAudioClip exist, but there is no ImportTexture3D
+// equivalent), so that approach turned out to be impossible. As a second-best option, we read Unity's
+// official PPv2 package source directly, worked out the actual formulas involved, and apply them
+// separately to material colors (via ColorGradingApproximation) and Reflection Probe intensity
+// (via ReflectionProbeConverter) as an approximation.
 //
-// 検証済みの数式・定数の出典（推測なし、全てcom.unity.postprocessing@3.4.0パッケージ本体から）:
-//   - PostProcessing/Shaders/Builtins/Lut3DBaker.compute （全体のパイプライン順序）
-//   - PostProcessing/Shaders/Colors.hlsl （WhiteBalance/LogC変換/Contrast/Saturation/NeutralTonemap）
-//   - PostProcessing/Runtime/Utils/ColorUtilities.cs （温度・Tintから_ColorBalanceベクトルへの変換）
-//   - PostProcessing/Runtime/Effects/ColorGrading.cs （UIパラメータの実際のスケール変換）
+// Sources for the verified formulas/constants (no guessing — all taken directly from the
+// com.unity.postprocessing@3.4.0 package itself):
+//   - PostProcessing/Shaders/Builtins/Lut3DBaker.compute (overall pipeline order)
+//   - PostProcessing/Shaders/Colors.hlsl (WhiteBalance / LogC conversion / Contrast / Saturation / NeutralTonemap)
+//   - PostProcessing/Runtime/Utils/ColorUtilities.cs (conversion from temperature/tint to the _ColorBalance vector)
+//   - PostProcessing/Runtime/Effects/ColorGrading.cs (actual scale conversion of the UI parameters)
 //
-// 対応範囲の限界（正直に明記）:
-//   - gradingMode=HighDefinitionRange かつ tonemapper=None/Neutral の経路のみ実装。
-//     tonemapper=ACESが選択されている場合は全く別のACEScc/ACEScgパイプラインが必要になるため
-//     未対応（該当時はトーンマップ段をスキップし、Contrast/Saturation/WhiteBalanceのみ適用）。
-//   - ChannelMixer・Lift/Gamma/Gain・Hue系カーブ(HueVsHue/SatVsSat/LumVsSat)は、このプロジェクトの
-//     実シーンではUnity既定値(恒等変換)であることを実機確認した上で未実装(恒等として扱う)。
-//     これらを実際に編集しているプロジェクトでは近似精度が落ちる。
+// Limits of what is covered (stated honestly):
+//   - Only the gradingMode=HighDefinitionRange path with tonemapper=None/Neutral is implemented.
+//     When tonemapper=ACES is selected, an entirely separate ACEScc/ACEScg pipeline would be required,
+//     which is not supported (in that case the tonemap stage is skipped and only Contrast/Saturation/
+//     WhiteBalance are applied).
+//   - ChannelMixer, Lift/Gamma/Gain, and the Hue-related curves (HueVsHue/SatVsSat/LumVsSat) are left
+//     unimplemented (treated as identity transforms), since we confirmed on the actual scenes in this
+//     project that they are left at Unity's defaults (identity transform). Projects that actually edit
+//     these will see reduced approximation accuracy.
 public static class PPv2ToneMapMath
 {
-    // --- LogC (ARRI LogC相当、Colors.hlslのParamsLogC定数と完全一致) ---
+    // --- LogC (equivalent to ARRI LogC; matches the ParamsLogC constants in Colors.hlsl exactly) ---
     const float LogC_cut = 0.011361f;
     const float LogC_a = 5.555556f;
     const float LogC_b = 0.047996f;
@@ -39,9 +45,9 @@ public static class PPv2ToneMapMath
     const float LogC_e = 5.301883f;
     const float LogC_f = 0.092819f;
 
-    // Contrastのピボット。Lut3DBaker.compute の LogGrade() が使う定数(ACES.hlsl)そのもの。
-    // 以前のColorGradingApproximation.csでは「線形空間で0.5」としていたが誤りで、実際は
-    // LogC空間でこの値がピボットに使われている。
+    // Contrast pivot. This is exactly the constant (from ACES.hlsl) used by LogGrade() in
+    // Lut3DBaker.compute. The earlier ColorGradingApproximation.cs used "0.5 in linear space", which was
+    // wrong — in reality this value is used as the pivot in LogC space.
     const float ACEScc_MIDGRAY = 0.4135884f;
 
     static readonly Matrix4x4 LIN_2_LMS_MAT = MakeMatrix(
@@ -74,25 +80,26 @@ public static class PPv2ToneMapMath
     public struct ResolvedSettings
     {
         public bool Found;
-        public bool TonemapperSupported; // false = ACES等、未対応トーンマッパー
+        public bool TonemapperSupported; // false = ACES or other unsupported tonemapper
         public bool ApplyTonemap;
 
-        public Vector3 ColorBalance; // WhiteBalance()に渡す係数（CAT02 LMS空間）
+        public Vector3 ColorBalance; // Coefficient passed to WhiteBalance() (in CAT02 LMS space)
         public Vector3 ColorFilter;
         public float ContrastMultiplier;
         public float SaturationMultiplier;
-        public float HueShift01; // 0..1 (360度を1に正規化)
+        public float HueShift01; // 0..1 (360 degrees normalized to 1)
     }
 
     static bool s_resolved;
     static ResolvedSettings s_settings;
 
-    // 2026-08-08 (Tanossy指摘「コントラストが足りない」): シーンのPost Processing Volumeの
-    // 実測値はcontrast=2(PPv2スライダー値)——実際の乗数に直すと`2/100+1=1.02`とほぼ無効に近い。
-    // Unity側はAmbient Occlusion/Bloom等トーンマッピング以外の要因で見た目のメリハリが出ている
-    // 可能性が高く、シーンのPPv2設定をそのまま模しても同じ迫力は出ない。Resonite送信専用の
-    // 追加コントラスト係数をここに設け、シーンの(ほぼ無効な)ContrastMultiplierに掛け合わせる。
-    // 1.0=追加なし。1.4は最初の実機検証値。
+    // 2026-08-08 (per Tanossy's feedback: "not enough contrast"): the measured value in the scene's Post
+    // Processing Volume is contrast=2 (PPv2 slider value) — converted to the actual multiplier that is
+    // `2/100+1=1.02`, which is close to having no effect at all. On the Unity side, the visual "punch" is
+    // likely coming mostly from factors other than tonemapping, such as Ambient Occlusion/Bloom, so
+    // simply mirroring the scene's PPv2 settings won't reproduce the same impact. We introduce an extra
+    // Resonite-send-only contrast coefficient here and multiply it into the scene's (nearly no-op)
+    // ContrastMultiplier. 1.0 = no extra effect. 1.4 was the first value confirmed via on-device testing.
     public static float ResoniteExtraContrast = 1.4f;
 
     public static ResolvedSettings GetSettings()
@@ -135,11 +142,11 @@ public static class PPv2ToneMapMath
             s_settings.TonemapperSupported = cg.tonemapper.value == Tonemapper.Neutral || cg.tonemapper.value == Tonemapper.None;
             s_settings.ApplyTonemap = cg.tonemapper.value == Tonemapper.Neutral;
 
-            break; // 最初に見つかったグローバルボリュームを採用(PostProcessingConverterと同方針)
+            break; // Use the first global volume found (same policy as PostProcessingConverter)
         }
     }
 
-    // ColorUtilities.ComputeColorBalance()の直接移植（推測なし）。
+    // Direct port of ColorUtilities.ComputeColorBalance() (no guessing).
     static Vector3 ComputeColorBalance(float temperature, float tint)
     {
         float t1 = temperature / 60f;
@@ -196,7 +203,7 @@ public static class PPv2ToneMapMath
         return new Vector3(luma, luma, luma) + sat * (c - new Vector3(luma, luma, luma));
     }
 
-    // Colors.hlsl の NeutralCurve()/NeutralTonemap() の直接移植（定数含め推測なし）。
+    // Direct port of NeutralCurve()/NeutralTonemap() from Colors.hlsl (including constants, no guessing).
     static float NeutralCurveScalar(float x, float a, float b, float c, float d, float e, float f) =>
         ((x * (a * x + c * b) + d * e) / (x * (a * x + b) + d * f)) - e / f;
 
@@ -221,9 +228,9 @@ public static class PPv2ToneMapMath
         return x;
     }
 
-    // Lut3DBaker.compute の LogGrade()→LUT_SPACE_DECODE→LinearGrade()→Tonemap の順序を、
-    // HueVsHue/SatVsSat/LumVsSatカーブとChannelMixer/Lift-Gamma-Gainを恒等とみなした上でそのまま
-    // 移植したもの。入力・出力ともリニア空間の色。
+    // A direct port of the LogGrade() -> LUT_SPACE_DECODE -> LinearGrade() -> Tonemap order from
+    // Lut3DBaker.compute, treating the HueVsHue/SatVsSat/LumVsSat curves and ChannelMixer/Lift-Gamma-Gain
+    // as identity transforms. Both input and output are colors in linear space.
     public static Vector3 ApplyGrading(Vector3 linearColor)
     {
         var settings = GetSettings();
@@ -231,11 +238,11 @@ public static class PPv2ToneMapMath
         if (!settings.Found)
             return linearColor;
 
-        // LogGrade: LogC空間でコントラストを適用
+        // LogGrade: apply contrast in LogC space
         var logSpace = LinearToLogC(linearColor);
         logSpace = Contrast(logSpace, ACEScc_MIDGRAY, settings.ContrastMultiplier);
 
-        // Linear空間へ戻してWhiteBalance・ColorFilter・Saturationを適用
+        // Convert back to linear space and apply WhiteBalance, ColorFilter, and Saturation
         var c = LogCToLinear(logSpace);
         c = WhiteBalance(c, settings.ColorBalance);
         c = Vector3.Scale(c, settings.ColorFilter);
@@ -248,13 +255,14 @@ public static class PPv2ToneMapMath
         return new Vector3(Mathf.Max(0f, c.x), Mathf.Max(0f, c.y), Mathf.Max(0f, c.z));
     }
 
-    // 2026-08-08 (Tanossy指摘「茶色味が足りない」): ApplyGrading()フル適用(Contrast込み)は
-    // ContrastMultiplier(1.4×約1.02≈1.428)が「_Color=白(1,1,1)」のマテリアルを更に白へ
-    // 押し上げてしまい(ピボットACEScc_MIDGRAY=0.4136より上にある値はcontrastを掛けるほど
-    // 明るい側へ)、テクスチャ本来の色を洗い流す逆効果だったため、MaterialGradingEnabledごと
-    // 無効化していた。しかしそれによりUnity元シーンのSaturation設定(=10 → 1.1倍という
-    // 穏やかな彩度ブースト)も道連れで失われ、ソファの茶色が「素の彩度」のまま出ていた。
-    // Contrast/WhiteBalance/Tonemapは経由せず、Saturationだけを独立して適用する。
+    // 2026-08-08 (per Tanossy's feedback: "not enough brown tone"): applying ApplyGrading() in full
+    // (including Contrast) had the side effect of pushing materials with "_Color = white (1,1,1)" even
+    // further toward white via the ContrastMultiplier (1.4 x approx. 1.02 ~= 1.428) — since values above
+    // the pivot ACEScc_MIDGRAY=0.4136 get pushed brighter the more contrast is applied — which washed
+    // out the texture's original colors, so it had been disabled entirely via MaterialGradingEnabled.
+    // However, that also threw away the original Unity scene's Saturation setting (=10 -> a mild 1.1x
+    // saturation boost) along with it, leaving the sofa's brown showing at its raw, unboosted saturation.
+    // This applies only Saturation on its own, without going through Contrast/WhiteBalance/Tonemap.
     public static Vector3 ApplySaturationOnly(Vector3 linearColor)
     {
         var settings = GetSettings();
@@ -265,10 +273,12 @@ public static class PPv2ToneMapMath
         return Saturation(linearColor, settings.SaturationMultiplier);
     }
 
-    // Reflection Probeの強度を代表輝度における実際のNeutralTonemap圧縮率で減衰させる。
-    // 単一のスカラー係数でカーブ全体を正確に再現することはできない(低輝度はほぼ無圧縮・
-    // 高輝度ほど強く圧縮される非線形カーブのため)が、何も補正しないよりは実際の計算式に
-    // 基づいた値になる。代表輝度は「そこそこ明るい反射」を想定しリニア値1.0を採用。
+    // Attenuates the Reflection Probe's intensity by the actual NeutralTonemap compression ratio at a
+    // representative brightness. A single scalar coefficient cannot exactly reproduce the entire curve
+    // (since it's a nonlinear curve where low brightness is barely compressed and high brightness is
+    // compressed much more strongly), but this still produces a value grounded in the actual formula
+    // rather than applying no correction at all. The representative brightness assumes "a moderately
+    // bright reflection" and uses a linear value of 1.0.
     public static float ComputeReflectionProbeCompensationFactor()
     {
         var settings = GetSettings();

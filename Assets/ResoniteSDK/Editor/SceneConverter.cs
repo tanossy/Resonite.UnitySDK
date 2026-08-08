@@ -36,9 +36,10 @@ public class SceneConverter : IConversionContext
     [SerializeField]
     HashSet<Transform> _existingSlots = new HashSet<Transform>();
 
-    // 2026-07-14: 単一の中間親スロット。Unity側の全ルートオブジェクトはワールドRootへ直接では
-    // なく、このスロットの下にまとめて送る（実Unity Transformを持たない合成スロットなので
-    // _transformMapでは追跡できず、専用フィールドで持つ）。
+    // 2026-07-14: Single intermediate parent slot. All Unity root objects are sent underneath
+    // this slot rather than directly under the world Root (since this is a synthetic slot with
+    // no real Unity Transform behind it, it can't be tracked via _transformMap, so it's held in
+    // its own dedicated field instead).
     [SerializeField]
     ResoniteLink.Slot _importRootSlot;
 
@@ -64,8 +65,9 @@ public class SceneConverter : IConversionContext
         if (o is FrooxEngine.Slot)
             throw new ArgumentException($"Cannot allocate ID for a Slot object! This needs to be handled through transforms");
 
-        // 2026-08-08: 採番元をGlobalIdAllocator(外だし、Editor/GlobalIdAllocator.cs)へ差し替え。
-        // 理由・実害の詳細はそちらのファイルコメント参照。
+        // 2026-08-08: ID generation source switched to GlobalIdAllocator (externalized into
+        // Editor/GlobalIdAllocator.cs). See that file's comment for the rationale and the
+        // real-world bug this fixes.
         return $"Unity_{UniqueSessionId}_{o?.GetType().Name}_{GlobalIdAllocator.Next():X}";
     }
 
@@ -274,7 +276,8 @@ public class SceneConverter : IConversionContext
         if (pass == ResoniteSdkConversionPass.Full && ConvertSkybox)
             _skybox.EnsureRoot();
 
-        // 2026-08-08: 除外判定はSceneRootFilter(外だし、Editor/SceneRootFilter.cs)へ移設。
+        // 2026-08-08: Exclusion logic moved to SceneRootFilter (externalized into
+        // Editor/SceneRootFilter.cs).
         var roots = SceneManager.GetActiveScene().GetRootGameObjects()
             .Where(g => !SceneRootFilter.ShouldExclude(g));
 
@@ -310,10 +313,10 @@ public class SceneConverter : IConversionContext
             {
                 var messages = new List<DataModelOperation>();
 
-                // 2026-07-14: このパスは Convert(IEnumerable<Transform> roots) を経由せず
-                // 直接 Convert/ConvertHierarchy を呼ぶため、_importRootSlot が未初期化の
-                // ままだと GatherTransformData の `_importRootSlot.ID` 参照でNPEになる。
-                // 冪等なので毎回呼んでおけば安全。
+                // 2026-07-14: This path calls Convert/ConvertHierarchy directly instead of
+                // going through Convert(IEnumerable<Transform> roots), so if _importRootSlot is
+                // left uninitialized, GatherTransformData's `_importRootSlot.ID` reference will
+                // NPE. This call is idempotent, so it's safe to invoke every time.
                 EnsureImportRootSlot(messages);
 
                 Convert(_assetConverter.AssetsRoot, messages);
@@ -348,14 +351,15 @@ public class SceneConverter : IConversionContext
 
             var messages = new List<DataModelOperation>();
 
-            // 2026-07-14 バグ修正（Tanossy指摘）: 以前はUnityの各ルートGameObject
-            // (Lighting/Structure/__UnityAssets/__UnitySkybox等、それぞれ独立したUnityシーン
-            // ルート)を、直接ResoniteのワールドRoot直下の子として送っていた
-            // (GatherTransformDataの `transform.parent == null -> TargetID = "Root"`)。
-            // このため世界のRoot直下に変換由来の複数の塊がバラバラに増えていき、
-            // セッションが変わる度に複製されても「どれが自分の出力か」を判別・掃除するのが
-            // 困難だった。単一の中間親スロット(ImportRootSlotName)を用意し、Unity側の全ルートを
-            // その下にまとめることで、掃除は「この1つの名前のスロットを消すだけ」で済むようにする。
+            // 2026-07-14 bug fix (per Tanossy's feedback): previously, each of Unity's root
+            // GameObjects (Lighting/Structure/__UnityAssets/__UnitySkybox, etc. - each an
+            // independent Unity scene root) was sent directly as a child of the Resonite world's
+            // Root (via GatherTransformData's `transform.parent == null -> TargetID = "Root"`).
+            // This caused multiple disconnected clusters of converted content to pile up directly
+            // under the world Root, and every time they got duplicated across sessions it became
+            // hard to tell which cluster was our own output and clean it up. By introducing a
+            // single intermediate parent slot (ImportRootSlotName) and grouping all Unity roots
+            // underneath it, cleanup becomes as simple as deleting this one named slot.
             EnsureImportRootSlot(messages);
 
             foreach (var root in roots)
@@ -589,10 +593,10 @@ public class SceneConverter : IConversionContext
     {
         AddUpdateSlotData message;
 
-        // 2026-07-14: 全エントリポイント（通常のConvert/RetryMissingAssetURLs/リアルタイム同期の
-        // TransformUpdated）がここを通るので、トップレベルのUnityルートを扱う直前に必ず
-        // _importRootSlot の存在を保証しておく。EnsureImportRootSlot は冪等なので、他の呼び出し元で
-        // 既に呼ばれていても無害。
+        // 2026-07-14: every entry point (the regular Convert path, RetryMissingAssetURLs, and
+        // realtime sync's TransformUpdated) passes through here, so we must always guarantee
+        // _importRootSlot exists right before handling a top-level Unity root. EnsureImportRootSlot
+        // is idempotent, so it's harmless even if another caller has already invoked it.
         if (transform.parent == null)
             EnsureImportRootSlot(messages);
 
@@ -625,19 +629,24 @@ public class SceneConverter : IConversionContext
     {
         if (_importRootSlot == null)
         {
-            // 2026-08-08 (Tanossy指摘「被せるはずだったよね？」): 以前はここで無条件に新規ID
-            // (AllocateId)を発行してAddSlotしていたため、再接続の度に(セッションIDが変わる度に)
-            // World Root直下へ全く別の「Unity Import」ツリーが並行して積み上がっていた
-            // (Update側の分岐は同一セッション内の2回目以降にしか効かない設計だったため)。
+            // 2026-08-08 (per Tanossy's feedback: "shouldn't this have overwritten the old one?"):
+            // previously, this code unconditionally issued a brand-new ID (AllocateId) and sent
+            // AddSlot, so every reconnect (i.e. every time the session ID changed) piled up an
+            // entirely separate "Unity Import" tree directly under World Root in parallel (the
+            // Update-side branch was only designed to kick in on the 2nd+ call within the same
+            // session).
             //
-            // 完全な差分更新(既存の子スロット1つ1つをIDで突き合わせて再利用する)は
-            // このSceneConverterインスタンス自体がセッション跨ぎの状態を持たない設計上、
-            // 大掛かりな再設計が必要になる。ここではそれよりシンプルで確実な方針を取る:
-            // 新しいセッションの最初の送信時に、World Root直下に既に同名("Unity Import")の
-            // スロットが無いか一度だけ問い合わせ、見つかったらそれを丸ごと削除してから
-            // 新規に作り直す。「差分更新」ではなく「掃除してから作り直す」だが、結果として
-            // 常にツリーが1つだけになるという、ユーザーから見た"被せる"効果は達成される。
-            // 2026-08-08: 探索ロジックはImportRootSlotHelper(外だし、Editor/ImportRootSlotHelper.cs)へ移設。
+            // A true diff-based update (matching each existing child slot by ID and reusing it)
+            // would require a much bigger redesign, since this SceneConverter instance doesn't
+            // hold state across sessions by design. Instead we take a simpler and more reliable
+            // approach here: on the first send of a new session, query once whether a slot with
+            // the same name ("Unity Import") already exists directly under World Root, and if
+            // found, delete it entirely before creating a fresh one. This isn't a true
+            // "diff-based update" but rather "clean up, then rebuild" - but the end result is
+            // that there is always exactly one tree, which achieves the "overwrite" effect the
+            // user expects.
+            // 2026-08-08: the lookup logic was moved to ImportRootSlotHelper (externalized into
+            // Editor/ImportRootSlotHelper.cs).
             var staleRootId = ImportRootSlotHelper.TryFindExistingId(Link, ImportRootSlotName);
 
             if (staleRootId != null)

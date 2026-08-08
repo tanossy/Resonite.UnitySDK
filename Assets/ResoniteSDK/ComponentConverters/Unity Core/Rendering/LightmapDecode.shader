@@ -9,7 +9,7 @@
 // happened to get compiled/stripped.
 //
 // _DecodeInstructions is likewise set explicitly from C# (LightmapDecoder.DetermineDecodeInstructions)
-// rather than hardcoded here as literals (Loki 2nd-pass review 指摘1) - see that method's doc
+// rather than hardcoded here as literals (Loki's 2nd-pass review, item 1) - see that method's doc
 // comment for exactly which UnityCG.cginc constants it mirrors and why (colorSpace-dependent for
 // mode 2/Double-LDR, colorSpace-independent for mode 1/RGBM).
 //

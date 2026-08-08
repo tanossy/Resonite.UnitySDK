@@ -7,14 +7,14 @@
 //
 // Deliberately geometry-normal-only (reads the mesh's NORMAL vertex attribute, never samples a
 // material's normal/bump map) — see DirectionalLightmapBaker.cs's header comment for why this is
-// scoped as "第1段階" only; a tangent-space normal-map version is an explicit follow-up, not
+// scoped as "Phase 1" only; a tangent-space normal-map version is an explicit follow-up, not
 // attempted here.
 //
 // Built-in RP shader (uses UnityCG.cginc), same style as LightmapDecode.shader in this same
 // folder. Only ever driven by CommandBuffer.DrawMesh into an offscreen RenderTexture from Editor
 // tooling code — never assigned to a renderer, so URP/HDRP compatibility is not a concern.
 //
-// 2026-07-12 bugfix (バグハンター指摘, ダイダロス対応): vert() below used to additionally flip its
+// 2026-07-12 bugfix (flagged by the bug hunter, fixed by Daedalus): vert() below used to additionally flip its
 // own manually-built clip-space Y by `_ProjectionParams.x`, attempting to hand-replicate Unity's
 // automatic per-platform Blit-quad Y-orientation compensation. That's unreliable here:
 // `_ProjectionParams` is populated by Unity's camera pipeline (SetupCameraProperties) for
@@ -77,7 +77,7 @@ Shader "ResoniteSDK/Internal/Uv2NormalPatch"
                 // (this pass covers exactly one renderer's own lightmap tile, at that tile's own
                 // pixel dimensions — see DirectionalLightmapBaker.RenderUv2NormalPatch).
                 //
-                // 2026-07-12 bugfix (バグハンター指摘): deliberately NO per-platform Y-flip here
+                // 2026-07-12 bugfix (flagged by the bug hunter): deliberately NO per-platform Y-flip here
                 // anymore (see this file's own header comment) — this pass's raw, uncompensated
                 // clip-space output is intentional; DirectionalLightmapBaker.RenderUv2NormalPatch
                 // applies the actual (proven) orientation correction downstream via

@@ -1,11 +1,13 @@
 using ResoniteLink;
 using System.Threading.Tasks;
 
-// 2026-08-08 (Tanossy指摘「被せるはずだったよね？」/「外だしして」): SceneConverterの
-// EnsureImportRootSlot()が呼ぶ、既存の「Unity Import」ルートスロット探索ロジック。以前は
-// SceneConverter.cs内の非static privateメソッドだったが、Link(接続)とスロット名以外の
-// インスタンス状態には依存していなかったため、パラメータ渡しのstaticメソッドとしてここへ
-// 外だしした。公式SDK側の変更はEnsureImportRootSlot()内の1呼び出し行だけで済む。
+// 2026-08-08 (per Tanossy's feedback: "shouldn't this have overwritten the old one?" / "pull this
+// out"): the lookup logic for a pre-existing "Unity Import" root slot, called from
+// SceneConverter's EnsureImportRootSlot(). Previously this was a non-static private method inside
+// SceneConverter.cs, but since it only depended on Link (the connection) and the slot name and no
+// other instance state, it was externalized here as a static method that takes those as
+// parameters. The change on the official SDK side is just the one call-site line inside
+// EnsureImportRootSlot().
 //
 // Best-effort lookup for a pre-existing "Unity Import" slot directly under World Root, from a
 // *previous* session (this or an earlier Editor session/connection). Returns its ID if found,

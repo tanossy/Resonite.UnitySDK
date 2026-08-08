@@ -26,16 +26,16 @@ using UnityEngine;
 //    HideFlags.DontSave clones. That doesn't survive an Editor domain reload (DontSave objects
 //    are destroyed on reload), which meant any AssetConversionManager converter GameObject that
 //    already held a reference to a previous variant as its `Source` would end up pointing at a
-//    destroyed/missing object post-reload (指摘2). It also meant the cache lived only in memory,
+//    destroyed/missing object post-reload (item 2). It also meant the cache lived only in memory,
 //    so nothing on disk actually named/scoped the variants, and two different scenes converting
-//    the same source material could produce colliding names/instances (指摘4/5).
+//    the same source material could produce colliding names/instances (items 4/5).
 //
 //    Instead, every variant is now a real project asset living at a deterministic path under
 //    Assets/ResoniteSDK/Generated/LightmapVariants/<sceneGUID>/. Looking one up is just
 //    AssetDatabase.LoadAssetAtPath - if it exists, Unity gives us back the *same* Material
 //    instance it always would for that path (survives domain reloads, scene reopens, and
 //    separate Editor sessions), and if it doesn't exist yet we create it once with
-//    AssetDatabase.CreateAsset. There is no in-memory cache to invalidate or go stale (指摘9): the
+//    AssetDatabase.CreateAsset. There is no in-memory cache to invalidate or go stale (item 9): the
 //    deterministic path *is* the cache key.
 //
 //  - Because a cache "hit" is now just "the asset already exists", we can no longer skip copying
@@ -43,35 +43,35 @@ using UnityEngine;
 //    would never propagate. So every property listed in GetVariantOrOriginalInner is
 //    unconditionally re-read from source and written to the variant on every call; a change is
 //    only detected (and EditorUtility.SetDirty called) property-by-property so we're not forcing
-//    a dirty/reserialize on every single frame when nothing actually changed (指摘1).
+//    a dirty/reserialize on every single frame when nothing actually changed (item 1).
 //
 //  - The deterministic asset name embeds the owning scene's GUID (unsaved scenes fall back to a
 //    shared "unsaved" bucket - see GetSceneGuid), so the same source material baked differently
-//    in two different scenes can never collide on the same variant asset (指摘4/5).
+//    in two different scenes can never collide on the same variant asset (items 4/5).
 //
 //  - The ScaleOffset component of the name is a bit-exact hash of the Vector4 (see HashScaleOffset
 //    / FloatBits) instead of relying on float equality/GetHashCode, so two ScaleOffsets are only
-//    ever treated as identical if they're bit-for-bit the same value (指摘11).
+//    ever treated as identical if they're bit-for-bit the same value (item 11).
 //
-//  - GetVariantOrOriginal never throws: eligibility checks are defensive (指摘6, including an
+//  - GetVariantOrOriginal never throws: eligibility checks are defensive (item 6, including an
 //    explicit HasProperty("_Mode") guard), and the entire lookup/creation body is wrapped in a
 //    try/catch that logs and falls back to the original material rather than aborting the whole
-//    conversion (指摘6).
+//    conversion (item 6).
 //
 // Loki 2nd-pass review notes:
-//  - 指摘2 (perf regression): every lookup used to be a bare AssetDatabase.LoadAssetAtPath call
+//  - item 2 (perf regression): every lookup used to be a bare AssetDatabase.LoadAssetAtPath call
 //    with no in-memory fronting at all. A session-scoped Dictionary<path, Material> cache (see
 //    _materialByPath below) now fronts that lookup. The on-disk asset remains the actual source of
 //    truth - if a domain reload clears the dictionary, the very next call just falls through to
 //    LoadAssetAtPath and refills it, so correctness never depends on the dictionary surviving a
 //    reload (that's exactly the old DontSave-cache bug this class was already rewritten once to
-//    fix - see 指摘2/9 above - so this front-cache is deliberately NOT a replacement for the
+//    fix - see items 2/9 above - so this front-cache is deliberately NOT a replacement for the
 //    asset-backed design, only a lookup-cost optimization on top of it). Because a cache "hit" is
 //    still just "the asset already exists", GetVariantOrOriginalInner keeps re-syncing every
 //    property on every call regardless of hit/miss (see the note above) - that part is unchanged
 //    and is cheap (in-memory Material property writes), unlike the AssetDatabase calls this cache
 //    actually saves.
-//  - 指摘4 (orphaned assets): because variant assets are named after a scene GUID + a hash of the
+//  - item 4 (orphaned assets): because variant assets are named after a scene GUID + a hash of the
 //    source material + ScaleOffset, deleting/renaming a scene, or a scene being re-baked with
 //    different content, can leave old variant .mat/.png assets behind under
 //    Assets/ResoniteSDK/Generated/LightmapVariants/<sceneGUID>/ that nothing ever re-visits or
@@ -79,7 +79,7 @@ using UnityEngine;
 //    scene GUID that has ever existed, which isn't something we can enumerate reliably) - use the
 //    "Resonite SDK/Clear Generated Lightmap Variants" menu item below to nuke the entire generated
 //    folder on demand; every entry in it is fully reproducible by re-running the scene conversion.
-//  - 2026-07-11 (ダイダロス): GetVariantOrOriginalInner now has an additional branch, taken only
+//  - 2026-07-11 (Daedalus): GetVariantOrOriginalInner now has an additional branch, taken only
 //    when the renderer's lightmap slot was baked with a directional lightmapper
 //    (LightmapData.lightmapDir != null), that substitutes a per-renderer combined texture from
 //    DirectionalLightmapBaker in place of the plain shared-atlas decode - see that branch's own
@@ -130,7 +130,7 @@ public static class LightmapMaterialCache
     };
 
     // Session-scoped memory front-cache for lightmap-variant Material assets, keyed by asset path.
-    // See the class-level comment above (指摘2) for the "AssetDatabase is still the source of
+    // See the class-level comment above (item 2) for the "AssetDatabase is still the source of
     // truth" invariant this relies on.
     static readonly Dictionary<string, Material> _materialByPath = new Dictionary<string, Material>();
 
@@ -139,11 +139,11 @@ public static class LightmapMaterialCache
     // the wrapper below can call AssetDatabase.SaveAssets() at most once per call - and only when
     // there's a genuinely new asset that needs to exist on disk - rather than unconditionally on
     // every call, which would be a needless performance hit on every already-converted material
-    // (指摘8).
+    // (item 8).
     static bool _createdNewAssetThisCall;
 
     /// <summary>
-    /// Loki 2nd-pass review 指摘4 (orphaned assets, see the class-level comment): deletes the
+    /// Loki's 2nd-pass review, item 4 (orphaned assets, see the class-level comment): deletes the
     /// entire Assets/ResoniteSDK/Generated/LightmapVariants folder (variant materials AND decoded
     /// lightmap PNGs alike - LightmapDecoder writes its output under the same root, via
     /// LightmapVariantStorage), and clears both in-memory front caches so nothing here can hand out
@@ -188,7 +188,7 @@ public static class LightmapMaterialCache
             // Only persist when this specific call actually created a brand new variant asset -
             // property-only updates to an already-existing variant are left for Unity's normal
             // dirty-asset save path, and a non-eligible/unchanged material has nothing to save at
-            // all (指摘8).
+            // all (item 8).
             if (_createdNewAssetThisCall)
                 AssetDatabase.SaveAssets();
 
@@ -257,7 +257,7 @@ public static class LightmapMaterialCache
 
         if (variant == null)
         {
-            // Loki 2nd-pass review 指摘6: Material.name should be the bare asset name, not the
+            // Loki's 2nd-pass review, item 6: Material.name should be the bare asset name, not the
             // ".mat"-suffixed *filename* - Unity itself never includes the extension in an
             // asset's Object.name (compare any other .mat in the Project window), so leaving the
             // extension in here was inconsistent with every other asset in the project and would
@@ -280,8 +280,8 @@ public static class LightmapMaterialCache
         // scene/index pair. See LightmapDecoder for the decode + persistence logic.
         var bakedLightmapTex = LightmapDecoder.GetDecodedLightmap(sceneGuid, lightmapIndex, lightmapData.lightmapColor);
 
-        // 2026-07-12 bugfix (バグハンター指摘, ダイダロス対応): this class's own header comment
-        // ("適格条件を満たさない場合はsourceのまま変更なしで返る") promises source is returned
+        // 2026-07-12 bugfix (per the Bug Hunter's feedback, addressed by Daedalus): this class's own header comment
+        // ("returns source unchanged when eligibility conditions aren't met") promises source is returned
         // unchanged whenever this material/renderer isn't eligible - but GetDecodedLightmap can
         // itself return null (missing decode shader, failed AssetDatabase import, etc. - see its
         // own doc comment) even once every eligibility check above has already passed, and that
@@ -295,7 +295,7 @@ public static class LightmapMaterialCache
 
         var bakedLightmapST = lightmapScaleOffset;
 
-        // --- ダイダロス追加: 「法線を焼き込む」実験的パス（2026-07-11） --------------------
+        // --- Added by Daedalus: experimental "bake in normals" path (2026-07-11) --------------------
         // Only taken when THIS lightmap slot was actually baked with a directional lightmapper
         // (lightmapData.lightmapDir != null - Unity only ever populates lightmapDir when
         // LightingSettings.directionalityMode was CombinedDirectional at bake time). Deliberately
@@ -357,7 +357,7 @@ public static class LightmapMaterialCache
         changed |= SetFloatIfChanged(variant, "_Cutoff", source.GetFloat("_Cutoff"));
         changed |= SetFloatIfChanged(variant, "_Mode", source.GetFloat("_Mode"));
 
-        // Loki 2nd-pass review 指摘7: Material.shaderKeywords (both the getter and the setter used
+        // Loki's 2nd-pass review, item 7: Material.shaderKeywords (both the getter and the setter used
         // here) is obsolete API, and wholesale-copying the source material's entire keyword set is
         // dead weight anyway - BakedLightmapStandard.shader is a small, purpose-built marker
         // shader (see that file) that only actually branches on _EMISSION, so every other keyword
@@ -543,7 +543,7 @@ public static class LightmapMaterialCache
     /// <summary>
     /// Session memory front-cache lookup for a variant Material at <paramref name="path"/>. The
     /// on-disk asset (AssetDatabase) remains the actual source of truth - see the class-level
-    /// comment (指摘2) for why this is safe even if the dictionary is empty/stale (e.g. right
+    /// comment (item 2) for why this is safe even if the dictionary is empty/stale (e.g. right
     /// after a domain reload).
     /// </summary>
     static Material GetCachedOrLoadMaterial(string path)

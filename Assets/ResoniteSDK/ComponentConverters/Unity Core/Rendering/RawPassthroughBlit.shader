@@ -1,5 +1,5 @@
 // Full-screen passthrough Blit pass used by DirectionalLightmapBaker.cs (2026-07-11 3rd-pass
-// bugfix, ロキ) to read LightmapData.lightmapDir (the RAW, un-decoded directional lightmap
+// bugfix, flagged by Loki) to read LightmapData.lightmapDir (the RAW, un-decoded directional lightmap
 // texture) back to the CPU via a Blit+ReadPixels sequence that is a FAITHFUL COPY of
 // LightmapDecoder.DecodeAndSave's own Graphics.Blit(source, rt, material) call (see that method
 // and LightmapDecode.shader in this same folder) — NOT DirectionalLightmapBaker's own earlier,

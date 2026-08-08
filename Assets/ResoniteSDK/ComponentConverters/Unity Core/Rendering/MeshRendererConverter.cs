@@ -92,7 +92,7 @@ public static class MeshRendererHelper
             // never eligible for lightmap-variant substitution to begin with
             // (LightmapMaterialCache.GetVariantOrOriginal already just returns null-for-null
             // unchanged), so counting them as "non-eligible" here was a false warning, not a real
-            // one (Loki 2nd-pass review 指摘3). Skip both the substitution call and the
+            // one (Loki 2nd-pass review, item 3). Skip both the substitution call and the
             // eligibility bookkeeping for them entirely; mat stays null exactly as it always did
             // for a null slot, so context.GetMaterial(mat) below sees the identical null it always
             // has.

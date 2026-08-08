@@ -1,14 +1,15 @@
 using UnityEditor;
 using UnityEngine;
 
-// 2026-08-08 (Tanossy指摘「汚してしまったSDKのパネルを戻したい・独自パネルにすべて機能はおいて」):
-// ResoniteLinkWindow（公式然としたメインパネル）から、部分送信テスト・クリーンアップ・状態リセット
-// 等のデバッグ専用機能をこちらへ切り出した。ResoniteLinkWindowは接続・Send Current Scene・
-// Realtime Modeという「常時使う導線」だけを残し、シンプルな見た目に戻している。
+// 2026-08-08 (per Tanossy's feedback: "I want to restore the SDK panel I'd messed up - keep all
+// the custom functionality in its own panel"): Debug-only features such as partial-send testing,
+// cleanup, and state reset have been split out of ResoniteLinkWindow (the official-looking main
+// panel) into this window. ResoniteLinkWindow has been restored to its simple appearance, keeping
+// only the "always-used controls" - Connect, Send Current Scene, and Realtime Mode.
 //
-// ここに移した機能はいずれもResoniteLinkWindow側に既にpublicメソッドとして実装済みのものを
-// 呼び出すだけで、ロジックの複製は一切していない（呼び出し先を直接参照するため、
-// LightmapTestHarness.csのようなリフレクション経由の間接呼び出しは不要）。
+// Everything moved here just calls the public methods already implemented on the
+// ResoniteLinkWindow side; none of the logic is duplicated (since we reference the target methods
+// directly, there's no need for indirect calls via reflection like in LightmapTestHarness.cs).
 public class ResoniteSDKDebugWindow : EditorWindow
 {
     [MenuItem("Resonite SDK/Open Debug Tools")]
@@ -70,9 +71,9 @@ public class ResoniteSDKDebugWindow : EditorWindow
         GUI.enabled = true;
     }
 
-    // LightmapTestHarness.PickResoniteLinkWindow()と同じ理由(複数インスタンスが
-    // FindObjectsOfTypeAllで返りうる)で、接続済みのものを優先して選ぶ。1つも接続済みが
-    // 無ければ最初に見つかったものを返す(Disconnected状態のガイダンス表示用)。
+    // For the same reason as LightmapTestHarness.PickResoniteLinkWindow() (multiple instances can
+    // be returned by FindObjectsOfTypeAll), prefer a connected one. If none are connected, return
+    // the first one found (used to show guidance for the Disconnected state).
     static ResoniteLinkWindow PickResoniteLinkWindow()
     {
         var windows = Resources.FindObjectsOfTypeAll<ResoniteLinkWindow>();

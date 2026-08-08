@@ -14,50 +14,61 @@ using UnityEngine;
 // (context.GetITexture2D for all textures, Color.ToColorX_sRGB() for colors, "_EMISSION" keyword
 // gating for emissive).
 //
-// 2026-08-08 (Tanossy指摘「ソファーの色味が違う」): AlbedoColor/EmissiveColorが
-// ColorGradingApproximation.Apply(...)を経由していなかった不備を修正。StandardBaseConverter
-// (非ライトマップ材質)側は既に呼んでいたが、このクラス(ライトマップ焼き込み材質=このシーンの
-// 大半)は呼び忘れていたため、Tonemap Compensationがマテリアル色に一切効いていなかった。
+// 2026-08-08 (per Tanossy's feedback: "the sofa's color looks off"): fixed a bug where
+// AlbedoColor/EmissiveColor weren't being routed through ColorGradingApproximation.Apply(...).
+// StandardBaseConverter (for non-lightmapped materials) was already calling it, but this class
+// (baked-lightmap materials, which make up most of this scene) had forgotten to, so Tonemap
+// Compensation had no effect at all on material colors.
 [MaterialConverter(false, "ResoniteSDK/BakedLightmapStandard")]
 public class BakedLightmapStandardConverter : ResoniteMaterialConverter
 {
-    // 2026-08-08 (Tanossy指摘「暗い・ギラつく」への対応、続き): 乗算のみ→暗すぎ、加算のみ→色が
-    // 白飛び、という二択がどちらも実機で不合格だったため、ハイブリッドに変更。SecondaryAlbedo
-    // 乗算(色の忠実度を保つ本来の合成)は常時維持しつつ、それとは別にSecondaryEmissiveMap経由で
-    // 同じベイクデータを控えめな強度で追加し、Unity側のベイクGIが担っていた「陰を持ち上げる
-    // アンビエントフィル」を近似する。この値は乗算成分に対する加算成分の相対的な強さ
-    // (0=純粋乗算のみ、1=旧EmissiveLightmapMode=true相当のフル加算)。0.35は初回の勘所であり、
-    // 実機で見た目を確認しながら調整する前提の未確定値。
-    // 2026-08-08 (Tanossy指摘「白は白っぽく、茶は茶っぽくコントラストが無いと困る」): 加算フィルは
-    // 原理的にコントラストを潰す — 暗い色に一定量を足すと明るい色との比率が縮まり、
-    // 白と茶色の差が薄れる(9:1の反射率差が、+0.3を足すと2.5:1まで縮む、という単純な算数)。
-    // 乗算(SecondaryAlbedo)は比率を保ったまま明暗だけ変わるので、色の書き分けを壊さない。
-    // 加算フィルは0に戻し、明るさの底上げはLightmapDecoder.RangeScale(乗算前のゲイン)側で行う
-    // 方針に転換。
+    // 2026-08-08 (continuing the response to Tanossy's feedback of "dark / blown out"): both
+    // options - pure multiply (too dark) and pure additive (colors blown out to white) - failed
+    // live testing, so switched to a hybrid approach. The SecondaryAlbedo multiply (the proper
+    // compositing that preserves color fidelity) is always kept active, and separately, the same
+    // baked data is added back in at a modest strength via SecondaryEmissiveMap, approximating
+    // the "shadow-lifting ambient fill" that Unity's baked GI used to provide. This value is the
+    // strength of the additive component relative to the multiplicative one (0 = pure multiply
+    // only, 1 = equivalent to the old EmissiveLightmapMode=true full-additive behavior). 0.35 was
+    // the first rough estimate, and it remains an unconfirmed value meant to be tuned while
+    // checking the look live.
+    // 2026-08-08 (per Tanossy's feedback: "white needs to look white and brown needs to look
+    // brown - there's no contrast and that's a problem"): the additive fill inherently crushes
+    // contrast - adding a fixed amount to a dark color shrinks its ratio to a bright color,
+    // washing out the difference between white and brown (simple math: a 9:1 reflectance ratio
+    // shrinks to about 2.5:1 once you add +0.3). Multiply (SecondaryAlbedo) keeps the ratio
+    // intact and only changes brightness, so it doesn't break the color distinction. Reverted the
+    // additive fill to 0, and switched the approach so brightness boosting is instead handled on
+    // the LightmapDecoder.RangeScale side (the gain applied before the multiply).
     public static float AdditiveFillStrength = 0.0f;
 
-    // 2026-08-08 (Tanossy指摘、続き): LightConverter.IntensityMultiplierでライトを明るくした分、
-    // 同じSmoothness値でもハイライトが比例して強く出るようになった(実機確認: ベッドの掛け布団が
-    // 金属光沢のように見えた)。この値はスカラーSmoothness経路(MetallicMap未設定のマテリアル、
-    // 例: bed01)にのみ効く — MetallicMapがあるマテリアル(couch01等、テクスチャのアルファ経由で
-    // Smoothnessが決まる)には別途アルファ側の減衰が必要(couch01_MetallicSmoothness等の
-    // 再生成時に反映)。0.6は初回の勘所。
+    // 2026-08-08 (continuing Tanossy's feedback): since LightConverter.IntensityMultiplier makes
+    // lights brighter, the same Smoothness value now produces proportionally stronger highlights
+    // (confirmed live: the bed's comforter started looking like polished metal). This value only
+    // affects the scalar Smoothness path (materials without a MetallicMap set, e.g. bed01) -
+    // materials that do have a MetallicMap (e.g. couch01, where Smoothness comes from the
+    // texture's alpha channel) need a separate attenuation applied on the alpha side (to be
+    // reflected when regenerating textures like couch01_MetallicSmoothness). 0.6 was the first
+    // rough estimate.
     public static float SmoothnessCompensation = 0.05f;
 
-    // 2026-08-08追記(Tanossy指摘「黒が黒でない」): Smoothness補正だけでは金属マテリアル
-    // (例: black metal, Metallic=0.844)のギラつきを抑えきれなかった——金属は拡散反射をほぼ
-    // 持たず、見た目のほぼ全てがスペキュラー反射なので、Smoothnessをいくら下げても
-    // 「反射が鈍くなる」だけで「反射しなくなる」わけではない。AlbedoColorを真っ黒にしても
-    // 金属面は明るい光源を映し込み続ける。Metallic自体も送信時に減衰させる。
+    // 2026-08-08 addendum (per Tanossy's feedback: "black doesn't look black"): Smoothness
+    // compensation alone couldn't tame the glare on metallic materials (e.g. black metal,
+    // Metallic=0.844) - metals have almost no diffuse reflection, so nearly everything you see is
+    // specular reflection, meaning no matter how far Smoothness is lowered, the reflection only
+    // gets "duller," it never actually stops reflecting. Even with AlbedoColor set to pure black,
+    // a metallic surface keeps mirroring bright light sources. So Metallic itself is now also
+    // attenuated at send time.
     public static float MetallicCompensation = 0.0f;
 
     // Verification mode for large baked scenes. The first in-world check only needs geometry,
     // material colors, and the baked lightmap; uploading every source albedo/normal/metallic/
     // occlusion/emission texture can overwhelm ResoniteLink before anything appears in-world.
     //
-    // 2026-08-08 (Tanossy指摘): "AlbedoTexture等が送られていない"の根本原因がこのフラグだった。
-    // ライトマップ経路自体は今日実機で繰り返し確認済み（SecondaryAlbedoTexture/URLとも正常に
-    // 届くことを確認済み）なので、falseへ切り替える。
+    // 2026-08-08 (per Tanossy's feedback): this flag turned out to be the root cause of
+    // "AlbedoTexture etc. aren't being sent." The lightmap path itself has already been verified
+    // repeatedly live today (confirmed SecondaryAlbedoTexture/URL both arrive correctly), so
+    // switching this to false.
     public static bool LightmapPreviewUploadOnly = false;
 
     public PBS_MultiUV_MetallicWrapper PBS;

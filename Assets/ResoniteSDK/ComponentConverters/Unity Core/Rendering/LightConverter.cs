@@ -27,8 +27,8 @@ public static class LightHelper
                 break;
         }
 
-        // 2026-08-08: 送信時チューニング値・ロジックはLightTuning(外だし、同フォルダの
-        // LightTuning.cs)へ移設。
+        // 2026-08-08: the send-time tuning values/logic have been moved out to LightTuning (a
+        // separate file, LightTuning.cs, in the same folder).
         resonite.Intensity = LightTuning.ApplyIntensity(unity.intensity);
         resonite.Color = new ColorX(LightTuning.ApplyColor(unity.color));
 

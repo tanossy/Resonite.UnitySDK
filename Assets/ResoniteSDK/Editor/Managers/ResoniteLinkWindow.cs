@@ -155,11 +155,12 @@ public class ResoniteLinkWindow : EditorWindow
         ConvertSkybox = GUILayout.Toggle(ConvertSkybox, "Convert Skybox");
         ForceRefreshGeneratedLightmaps = GUILayout.Toggle(ForceRefreshGeneratedLightmaps, "Force Refresh Generated Lightmaps");
 
-        // 2026-08-08 (Tanossy指摘「オプションでパネル上でオンオフできるように」): マテリアル色への
-        // トーンマップ近似(ColorGradingApproximation)とReflection Probe強度減衰
-        // (ReflectionProbeConverter)の両方をこの1つのトグルでまとめて制御する。実体は
-        // Assets/ResoniteSDK/ToneMapCompensation/ToneMapCompensationState.cs（本体SDKから独立した
-        // フォルダ）の static bool。
+        // 2026-08-08 (per Tanossy's feedback: "make it toggleable on/off from an option in the
+        // panel"): This single toggle controls both the tonemap approximation applied to material
+        // colors (ColorGradingApproximation) and the Reflection Probe intensity falloff
+        // (ReflectionProbeConverter) together. The backing state is a static bool in
+        // Assets/ResoniteSDK/ToneMapCompensation/ToneMapCompensationState.cs (a folder kept
+        // independent from the core SDK).
         ToneMapCompensation = GUILayout.Toggle(ToneMapCompensation, "Send Tonemap Compensation (experimental)");
         ToneMapCompensationState.Enabled = ToneMapCompensation;
 
@@ -181,12 +182,13 @@ public class ResoniteLinkWindow : EditorWindow
 
         GUI.enabled = true;
 
-        // 2026-08-08 (Tanossy指摘「独自パネルにすべて機能はおいて」): Meshes/Materials/Lightmaps
-        // Only送信・Retry Missing Asset URLs・DEBUGGINGセクション一式(Cleanup系・Reset conversion
-        // state・Log Messages JSON)は、この公式然としたパネルから ResoniteSDKDebugWindow.cs
-        // (メニュー: Resonite SDK/Open Debug Tools) へ移設した。呼び出し先メソッドはそちらから
-        // 直接参照できるようpublicへ変更済み。ここには常時使う導線(接続・Send Current Scene・
-        // Realtime Mode)だけを残す。
+        // 2026-08-08 (per Tanossy's feedback: "keep all the custom functionality in its own
+        // panel"): The "Meshes/Materials/Lightmaps Only" sends, "Retry Missing Asset URLs", and the
+        // whole DEBUGGING section (Cleanup tools, Reset conversion state, Log Messages JSON) have
+        // been moved out of this official-looking panel and into ResoniteSDKDebugWindow.cs
+        // (menu: Resonite SDK/Open Debug Tools). The methods they call have been changed to public
+        // so they can be referenced directly from there. Only the always-used controls
+        // (Connect, Send Current Scene, Realtime Mode) remain here.
     }
 
     // Force an update, which should refresh the UI
@@ -352,31 +354,35 @@ public class ResoniteLinkWindow : EditorWindow
 
     public void ResetConversionState()
     {
-        // 2026-07-14 バグ修正（Tanossy指摘）: これまでは _converter を作り直すだけで、
-        // Unityシーン内に既に存在する __UnityAssets / __UnitySkybox ルート配下の変換器
-        // (Texture2DConverter/MeshConverter/AudioClipConverter等、AssetConversionManagerの
-        // コンストラクタが「同名ルートがあれば中身をスキャンして再利用する」設計になっている)
-        // がそのまま生き残っていた。
+        // 2026-07-14 bug fix (per Tanossy's feedback): Previously this method only recreated
+        // _converter, while the converters already living under the __UnityAssets / __UnitySkybox
+        // roots in the Unity scene (Texture2DConverter/MeshConverter/AudioClipConverter etc. -
+        // AssetConversionManager's constructor is designed to "scan and reuse the contents if a
+        // root with the same name already exists") were left surviving as-is.
         //
-        // これらの変換器は「前回のセッション」が発行したIDを保持したままなので、新しいセッション
-        // (UniqueSessionIdが変わった、あるいは接続が壊れて再接続した場合)から見ると存在しない
-        // コンポーネントを指すことになり、"Component with ID '...' not found" のような更新失敗を
-        // 引き起こす。シーン階層側の変換器も同様の理由でセッションをまたいで複製されうる。
+        // Because these converters still held onto the IDs issued by the "previous session", a new
+        // session (whether UniqueSessionId changed, or the connection broke and reconnected) would
+        // see them as pointing to components that no longer exist, causing update failures like
+        // "Component with ID '...' not found". Converters on the scene hierarchy side could also
+        // end up duplicated across sessions for the same reason.
         //
-        // 修正: 新しいセッションを認識してリセットする際は、司令塔(_converter)を作り直すだけで
-        // なく、既存の変換器コンポーネント一式(シーン階層側+アセット側の両方)も破棄し、
-        // 次の変換が完全にクリーンな状態から始まるようにする。
+        // Fix: when recognizing a new session and resetting, don't just recreate the controller
+        // (_converter) - also destroy the full existing set of converter components (both on the
+        // scene hierarchy side and the asset side), so the next conversion starts from a
+        // completely clean state.
         //
-        // 2026-07-15 (実機で"Destroying object multiple times"警告多発を確認・修正):
-        // CleanupReosniteComponents()は元々ここに含めていたが、実質的に完全に冗長だった。
-        // シーン階層側のResoniteComponentは全てResoniteComponentConverter.OnDestroy()→
-        // Cleanup()→DestroyImmediate(Binding)の連鎖で既に破棄済み(CleanupConverters()の
-        // DestroyImmediate(converter)がこの連鎖を毎回トリガーする)。アセット側の
-        // ResoniteComponent(Provider)も、CleanupAssetConversionRoots()が__UnityAssets/
-        // __UnitySkybox自体をまるごと破棄する時点で子ごと巻き込まれて消える。同じ
-        // コンポーネントをCleanupReosniteComponents()が独自にGetComponentsInChildren<
-        // ResoniteComponent>()で拾い直し、既に(連鎖/親破棄で)破棄済みのものへもう一度
-        // DestroyImmediateしようとしていたため二重破棄警告が出ていた。
+        // 2026-07-15 (fixed after observing frequent "Destroying object multiple times" warnings
+        // on real hardware): CleanupReosniteComponents() was originally included here, but it
+        // turned out to be entirely redundant. Every ResoniteComponent on the scene hierarchy side
+        // is already destroyed via the chain ResoniteComponentConverter.OnDestroy() -> Cleanup() ->
+        // DestroyImmediate(Binding) (CleanupConverters()'s DestroyImmediate(converter) triggers
+        // this chain every time). The ResoniteComponent(Provider) on the asset side is also swept
+        // away as a child at the point where CleanupAssetConversionRoots() destroys
+        // __UnityAssets/__UnitySkybox themselves entirely. CleanupReosniteComponents() was
+        // independently re-collecting the same components via
+        // GetComponentsInChildren<ResoniteComponent>() and trying to DestroyImmediate them again
+        // even though they were already destroyed (via the chain / parent destruction), which is
+        // what produced the double-destroy warning.
         CleanupConverters();
         CleanupAssetConversionRoots();
 
@@ -384,11 +390,12 @@ public class ResoniteLinkWindow : EditorWindow
         EnsureConverter();
     }
 
-    // __UnityAssets / __UnitySkybox は「同名のGameObjectが既にあれば中身を再利用する」設計
-    // (AssetConversionManagerのコンストラクタ、SkyboxConverter.EnsureRoot()) のため、
-    // CleanupConverters()/CleanupReosniteComponents()で個々のコンポーネントを消すだけでなく、
-    // ルートGameObjectごと破棄しないと「空の器に前回セッションの変換器が再度スキャンされて
-    // 蘇る」事故を防げない。
+    // __UnityAssets / __UnitySkybox are designed to "reuse the contents if a GameObject with the
+    // same name already exists" (AssetConversionManager's constructor, SkyboxConverter.EnsureRoot()),
+    // so simply removing individual components via CleanupConverters()/CleanupReosniteComponents()
+    // isn't enough to prevent the accident where "converters from the previous session get
+    // rescanned and resurrected into the empty container" - the root GameObject itself must be
+    // destroyed too.
     void CleanupAssetConversionRoots()
     {
         var roots = SceneManager.GetActiveScene().GetRootGameObjects();

@@ -1,41 +1,51 @@
 using UnityEngine;
 
-// 2026-08-08 (Tanossy指摘「できる限りオリジナルソースはいじりたくないので外だしして」):
-// 公式LightConverter.cs内のLightHelper.SetFrom()が行うIntensity/Color代入2行だけを差し替える
-// ための送信時チューニング値。公式ファイル側の変更は
+// 2026-08-08 (per Tanossy's feedback: "I want to touch the original upstream source as little as
+// possible, so factor this out"): send-time tuning values used to replace just the two
+// Intensity/Color assignment lines inside LightHelper.SetFrom() in the official LightConverter.cs.
+// The tuning values and logic have been factored out entirely into this new file, so that the
+// only change needed on the official file's side is swapping in these two lines:
 // `resonite.Intensity = LightTuning.ApplyIntensity(unity.intensity);` /
-// `resonite.Color = new ColorX(LightTuning.ApplyColor(unity.color));` の2行差し替えのみで済む
-// よう、調整値・調整ロジックを完全にこの新規ファイルへ外だししている。
+// `resonite.Color = new ColorX(LightTuning.ApplyColor(unity.color));`
 public static class LightTuning
 {
-    // 2026-08-08 (Tanossy指摘「暗い」への対応): UnityではLight.intensity=0.5のまま実機で
-    // 適切な明るさに見えている(Indirectベイク+実ライトの組み合わせ、同一シーン・同一カメラ角度で
-    // 実証確認済み)のに対し、同じ値をそのまま送ったResonite側は明らかに暗い。ベイクデータの
-    // 加算フィル(BakedLightmapStandardConverter.AdditiveFillStrength)を上げても頭打ちだった
-    // ため、原因をUnity/Resonite間のPoint/Spot Light減衰カーブ・輝度換算の違いと見て、
-    // 送信時だけ効く倍率をここに追加する。3.0は最初の実機検証値であり確定値ではない。
+    // 2026-08-08 (in response to Tanossy's feedback of "too dark"): in Unity, Light.intensity=0.5
+    // already looks appropriately bright live (confirmed with a combination of indirect baking +
+    // real lights, verified in the same scene at the same camera angle), whereas sending that
+    // same value straight through makes it noticeably darker in Resonite. Raising the baked-data
+    // additive fill (BakedLightmapStandardConverter.AdditiveFillStrength) hit a ceiling, so the
+    // cause was attributed to differences between Unity and Resonite in Point/Spot Light falloff
+    // curves and luminance conversion, and a send-time-only multiplier was added here instead.
+    // 3.0 was the first live-verified value and is not final.
     //
-    // 2026-08-08追記(Tanossy指摘「Unityで黒いのにResoniteで黒くない」): 3.0はTV画面・
-    // 金属フレーム・ガラス等スペキュラー主体のマテリアルで反射が過剰になり、Unity側では黒く
-    // 見えている面がResoniteでは明るく浮いてしまう副作用があった(特にMetallic値が高い素材は
-    // 拡散反射をほぼ持たず、見た目のほぼ全てがスペキュラー反射のため、Albedoをどれだけ暗くしても
-    // 打ち消せない)。1.8へ引き下げ。その後ユーザーが「ライトの明るさを元の明るさからの倍率で
-    // 合わせるようにインポーターがなっている？」と確認・単純な倍率であることに納得した上で2.5に
-    // 再調整。
+    // 2026-08-08 addendum (per Tanossy's feedback: "it's black in Unity but not black in
+    // Resonite"): 3.0 caused excessive reflections on specular-dominant materials such as TV
+    // screens, metal frames, and glass, with the side effect that surfaces which looked black in
+    // Unity appeared bright and floating in Resonite (materials with a high Metallic value in
+    // particular have almost no diffuse reflection, so nearly everything you see is specular
+    // reflection, which no amount of darkening the Albedo can cancel out). Lowered to 1.8.
+    // Afterward, once the user confirmed "so the importer is matching the light brightness as a
+    // multiplier of the original brightness?" and was satisfied that it's simply a multiplier, it
+    // was readjusted to 2.5.
     //
-    // 2026-08-08さらに追記(Tanossy指摘「明るすぎるのでポイントライトの明るさの増加具合、
-    // 減らした方がいいかも」): 外だし直後の再検証中に指摘。ライト種別ごとの差別化(Point限定の
-    // 別倍率)も選択肢として提示したが、シンプルさを優先し全ライト共通のこの値を再度1.8へ。
+    // 2026-08-08 further addendum (per Tanossy's feedback: "it's too bright, maybe reduce how
+    // much point light brightness gets increased"): raised during re-verification right after the
+    // factor-out. Per-light-type differentiation (a separate multiplier just for Point lights)
+    // was offered as an option, but simplicity was prioritized and this single shared value for
+    // all lights was set back to 1.8.
     public static float IntensityMultiplier = 1.8f;
 
-    // 2026-08-08 (Tanossy指摘「黄身が多い、白味を上げたい」): 部屋の光源色がUnity側のまま
-    // 暖色(ColorX(1, 0.89, 0.75)相当)で転送されており、Resonite側でこれが実際より黄色く
-    // 感じられている。光源色そのものを送信時だけ白側へブレンドする(0=Unityの色そのまま、
-    // 1=純白)。0.4→0.7で確定。
+    // 2026-08-08 (per Tanossy's feedback: "too much yellow, want to boost the whiteness"): the
+    // room's light color is being transferred straight through from Unity as a warm tone (roughly
+    // ColorX(1, 0.89, 0.75)), and this reads as more yellow than intended once it's in Resonite.
+    // The light color itself is blended toward white at send time only (0 = Unity's color
+    // unchanged, 1 = pure white). Finalized at 0.4 -> 0.7.
     //
-    // 既知の限界(2026-08-08、ユーザーへ説明済み・保留合意): 元の色相に関わらず一律で白へ
-    // Lerpするため、シーン内に複数の異なる色の光源があった場合、本来の色差が均等に薄まって
-    // しまう(このワールドは単一の暖色系照明のみのため実害なしと判断・対応は次回以降に持ち越し)。
+    // Known limitation (2026-08-08, explained to the user and agreed to leave as-is for now):
+    // since this Lerps uniformly toward white regardless of the original hue, if a scene has
+    // multiple light sources of different colors, their original color differences get equally
+    // diluted (this world only has a single warm-toned lighting scheme, so it was judged to cause
+    // no real harm; properly addressing it is deferred to a future pass).
     public static float WhiteBalanceShift = 0.7f;
 
     public static float ApplyIntensity(float unityIntensity) => unityIntensity * IntensityMultiplier;

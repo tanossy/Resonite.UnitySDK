@@ -5,7 +5,7 @@ using UnityEditor;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-// "法線を焼き込む（実験的）" — Step 2 (2026-07-11, ダイダロス). Only ever invoked from
+// "Bake in normals (experimental)" — Step 2 (2026-07-11, Daedalus). Only ever invoked from
 // LightmapMaterialCache.GetVariantOrOriginalInner, and only when that call site has already
 // confirmed the renderer's lightmap slot has a non-null LightmapData.lightmapDir (i.e. it was
 // baked with LightingSettings.directionalityMode == LightmapsMode.CombinedDirectional — see
@@ -24,7 +24,7 @@ using UnityEngine.Rendering;
 //   1. Rendering this renderer's own interpolated *geometry* (vertex) normal into UV2 space, at
 //      the same texel density as its footprint in the shared lightmap atlas (see
 //      RenderUv2NormalPatch / Uv2NormalPatch.shader in this same folder). Deliberately geometry-
-//      only — no tangent-space normal-map sampling. See "第2段階" note below.
+//      only — no tangent-space normal-map sampling. See the "Phase 2" note below.
 //   2. Reading back that normal patch plus the matching sub-rect of the shared, already-decoded
 //      color lightmap (LightmapDecoder.GetDecodedLightmap — reused as-is, not reimplemented) and
 //      the RAW directional lightmap texture (LightmapData.lightmapDir — sampled with no CPU-side
@@ -56,7 +56,7 @@ using UnityEngine.Rendering;
 // Graphics.Blit-based readback of lightmapDir therefore intentionally applies no RGBM/gamma
 // transform, mirroring that real shader code path exactly.
 //
-// --- What this deliberately does NOT do ("第2段階", a separate follow-up task) --------------
+// --- What this deliberately does NOT do ("Phase 2", a separate follow-up task) --------------
 // Only the mesh's own vertex NORMAL is used. A material's tangent-space normal map is never
 // sampled — surface bump/detail that a normal map would add to the directional response is not
 // reproduced by this pass, only the coarse per-triangle mesh shading is. See Uv2NormalPatch.shader
@@ -69,7 +69,7 @@ public static class DirectionalLightmapBaker
 {
     const string Uv2NormalPatchShaderName = "ResoniteSDK/Internal/Uv2NormalPatch";
 
-    // 2026-07-11 3rd-pass bugfix (ロキ): see RawPassthroughBlit.shader's own header comment and
+    // 2026-07-11 3rd-pass bugfix (Loki): see RawPassthroughBlit.shader's own header comment and
     // BlitReadableAtlas below for why dirTex's Blit now goes through this material instead of
     // the argument-less Graphics.Blit(source, rt) overload this class used to call directly.
     const string RawPassthroughShaderName = "ResoniteSDK/Internal/RawPassthroughBlit";
@@ -220,7 +220,7 @@ public static class DirectionalLightmapBaker
         if (normalPatch == null)
             return null; // Already logged inside RenderUv2NormalPatch.
 
-        // 2026-07-11 3rd-pass bugfix (ロキ): color and dir are each materialized as a FULL,
+        // 2026-07-11 3rd-pass bugfix (Loki): color and dir are each materialized as a FULL,
         // CPU-readable atlas texture via their own proven-orientation-correct path (see
         // LoadReadableColorAtlas / BlitReadableAtlas's own doc comments for exactly what
         // "proven" means for each) BEFORE any cropping happens, replacing this class's earlier
@@ -308,7 +308,7 @@ public static class DirectionalLightmapBaker
     /// Deterministic, process/session-stable identity string for a scene renderer, used as part
     /// of this class's persisted asset filename.
     ///
-    /// 2026-07-12 bugfix (バグハンター/ロキ レビュー指摘, ダイダロス対応): this used to be a
+    /// 2026-07-12 bugfix (per the Bug Hunter's/Loki's review feedback, addressed by Daedalus): this used to be a
     /// simple FNV-1a fold of the renderer's full scene hierarchy path built from GameObject
     /// NAMES only (t.name at every ancestor, joined with "/"). Two sibling GameObjects under the
     /// same parent that happen to share the same name — a routine, unremarkable mistake in
@@ -398,7 +398,7 @@ public static class DirectionalLightmapBaker
     /// the actual rasterization technique. Returns a readable Texture2D (caller owns/destroys it)
     /// or null if the shader can't be found.
     ///
-    /// 2026-07-12 bugfix (バグハンター指摘, ダイダロス対応): this CommandBuffer.DrawMesh pass has
+    /// 2026-07-12 bugfix (per the Bug Hunter's feedback, addressed by Daedalus): this CommandBuffer.DrawMesh pass has
     /// no camera/view-projection context at all — the render target's UV parameterization itself
     /// IS the "projection" (see this method's own DrawMesh call and Uv2NormalPatch.shader's vert()
     /// for how the mesh's UV2 is mapped straight to clip space). Uv2NormalPatch.shader used to
@@ -482,7 +482,7 @@ public static class DirectionalLightmapBaker
     }
 
     /// <summary>
-    /// 2026-07-11 3rd-pass bugfix (ロキ): loads <paramref name="decodedColor"/>'s own already-
+    /// 2026-07-11 3rd-pass bugfix (Loki): loads <paramref name="decodedColor"/>'s own already-
     /// persisted PNG asset FILE BYTES directly (File.ReadAllBytes + Texture2D.LoadImage) instead
     /// of Blit-ing it through a RenderTexture at all. <paramref name="decodedColor"/> (i.e.
     /// LightmapDecoder's LMTex_{index}.png) is a real-machine-verified, CORRECTLY-ORIENTED asset —
@@ -555,7 +555,7 @@ public static class DirectionalLightmapBaker
     }
 
     /// <summary>
-    /// 2026-07-11 3rd-pass bugfix (ロキ): faithfully replicates LightmapDecoder.DecodeAndSave's
+    /// 2026-07-11 3rd-pass bugfix (Loki): faithfully replicates LightmapDecoder.DecodeAndSave's
     /// own Graphics.Blit(source, rt, material) + whole-image ReadPixels sequence (see that method
     /// and LightmapDecode.shader) for <paramref name="source"/>, instead of this class's own
     /// earlier from-scratch Graphics.Blit(source, rt) call (no material). Real-machine
@@ -578,7 +578,7 @@ public static class DirectionalLightmapBaker
     /// non-color direction/normal data, not albedo (see this class's header comment on "dirTex
     /// read-with-no-decode is not a guess"). Caller owns/destroys the returned texture.
     ///
-    /// 2026-07-12 bugfix (バグハンター指摘, ダイダロス対応): generalized from
+    /// 2026-07-12 bugfix (per the Bug Hunter's feedback, addressed by Daedalus): generalized from
     /// "BlitReadableDirAtlas(Texture2D dirTex, ...)" to accept any <see cref="Texture"/> source —
     /// RenderUv2NormalPatch now also routes its own freshly-DrawMesh-rendered RenderTexture through
     /// this exact same proven Blit+ReadPixels sequence (a RenderTexture is itself a valid Blit
@@ -627,7 +627,7 @@ public static class DirectionalLightmapBaker
     }
 
     /// <summary>
-    /// 2026-07-11 bugfix (ロキ): reads this renderer's <paramref name="tileWidth"/> x
+    /// 2026-07-11 bugfix (Loki): reads this renderer's <paramref name="tileWidth"/> x
     /// <paramref name="tileHeight"/> atlas footprint starting at (<paramref name="tileX"/>,
     /// <paramref name="tileY"/>), which — per Renderer.lightmapScaleOffset's own documented
     /// semantics (atlasUV = uv2 * scale + offset) — is derived directly from the offset
@@ -658,7 +658,7 @@ public static class DirectionalLightmapBaker
     /// (correctly) edge-replicating a texel or two of border in the rare case the true rect
     /// genuinely does extend past the atlas edge, instead of importing unrelated atlas content.
     ///
-    /// 2026-07-11 3rd-pass bugfix (ロキ): <paramref name="atlas"/> is now always an already-fully-
+    /// 2026-07-11 3rd-pass bugfix (Loki): <paramref name="atlas"/> is now always an already-fully-
     /// materialized, CPU-readable Texture2D in a PROVEN-correct orientation (see
     /// LoadReadableColorAtlas / BlitReadableAtlas, whose outputs are this method's only two
     /// callsites' inputs) — so the

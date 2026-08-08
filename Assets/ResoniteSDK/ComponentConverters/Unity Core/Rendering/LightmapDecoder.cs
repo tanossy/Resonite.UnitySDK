@@ -9,7 +9,7 @@ using UnityEngine;
 // LightmapMaterialCache for use as the ResoniteSDK/BakedLightmapStandard marker material's
 // _BakedLightmap property.
 //
-// Why this exists (Loki review 指摘3): the old implementation assigned
+// Why this exists (Loki's review, item 3): the old implementation assigned
 // LightmapSettings.lightmaps[i].lightmapColor directly as _BakedLightmap, with no decode step at
 // all. Unity's baked lightmap textures are not "as-is" albedo-multiplier textures - depending on
 // project/platform settings they're stored either as true HDR pixel data (BC6H / RGBAHalf /
@@ -19,7 +19,7 @@ using UnityEngine;
 // Renderite's SecondaryAlbedo slot would produce visibly wrong (washed out/inverted-looking)
 // lighting in Resonite.
 //
-// Bakery note (指摘13): this only reads LightmapSettings.lightmaps[i].lightmapColor, i.e. Bakery's
+// Bakery note (Loki's review, item 13): this only reads LightmapSettings.lightmaps[i].lightmapColor, i.e. Bakery's
 // Unity-compatible non-directional bake mode (where Bakery itself writes its result through the
 // standard Unity lightmap slot). Bakery's RNM (Radiosity Normal Mapping) directional mode instead
 // bakes into a separate set of custom directional textures that never touch lightmapColor, and
@@ -32,8 +32,8 @@ public static class LightmapDecoder
     // Mirrors UnityCG.cginc's own `#define LIGHTMAP_RGBM_SCALE 5.0` (verified against the actual
     // installed Editor version's CGIncludes/UnityCG.cginc, not assumed) - the single source of
     // truth for this constant now lives here in C# and is pushed to the decode shader as part of
-    // _DecodeInstructions, instead of being duplicated as a shader-side literal (Loki 2nd-pass
-    // review 指摘1).
+    // _DecodeInstructions, instead of being duplicated as a shader-side literal (Loki's 2nd-pass
+    // review, item 1).
     const float LightmapRgbmScale = 5.0f;
 
     // Session-scoped memory front-cache for decoded lightmap textures, keyed by asset path.
@@ -44,15 +44,15 @@ public static class LightmapDecoder
     // lookup, hit or miss, since a cached Texture2D reference doesn't tell us whether the source
     // lightmap has since been re-baked. If a domain reload clears this dictionary, the very next
     // call simply falls through to AssetDatabase and refills it; no correctness depends on this
-    // surviving a reload (Loki 2nd-pass review 指摘2 - do not reintroduce the old DontSave-object
+    // surviving a reload (Loki's 2nd-pass review, item 2 - do not reintroduce the old DontSave-object
     // cache bug this way).
     static readonly Dictionary<string, Texture2D> _decodedByPath = new Dictionary<string, Texture2D>();
 
     // Tracks whether GetDecodedLightmapInner actually (re-)decoded and wrote a lightmap PNG during
     // the current top-level GetDecodedLightmap call, so the wrapper below can call
     // AssetDatabase.SaveAssets() at most once per call - and only when there's actually something
-    // new to persist - rather than unconditionally on every call (Loki 2nd-pass review 指摘8: that
-    // would be a needless performance hit on every single already-decoded lightmap lookup).
+    // new to persist - rather than unconditionally on every call (Loki's 2nd-pass review, item 8:
+    // that would be a needless performance hit on every single already-decoded lightmap lookup).
     static bool _createdNewAssetThisCall;
 
     // PNG-decode range headroom. Baked lightmaps in Unity frequently carry HDR values above 1.0
@@ -65,38 +65,47 @@ public static class LightmapDecoder
     // adjustment. This is a static, process-wide knob rather than a per-lightmap one - v1 doesn't
     // attempt per-lightmap auto-exposure.
     //
-    // 2026-08-08 (Tanossy指摘「白は白っぽく、茶は茶っぽくコントラストが無いと困る」への対応):
-    // 実測でこのシーンのベイクデータは線形平均0.06〜0.14程度と暗く、SecondaryAlbedo乗算だけでは
-    // 部屋全体が暗くなりすぎていた。加算フィル(BakedLightmapStandardConverter.
-    // AdditiveFillStrength)で底上げする案は色のコントラストを潰すため却下(乗算前提のこの値を
-    // 上げる方が正しい――乗算は比率を保つので、白は白のまま・茶は茶のまま明るくなる)。
-    // 3.0は最初の実機検証値。
+    // 2026-08-08 (per Tanossy's feedback: "white areas should look white, brown areas should look
+    // brown - we need some contrast, this is a problem"): measured against real data, this scene's
+    // bake data has a linear average of roughly 0.06-0.14, which is dark, and multiplying by
+    // SecondaryAlbedo alone made the whole room too dark. The option of boosting brightness via the
+    // additive fill (BakedLightmapStandardConverter.AdditiveFillStrength) was rejected because it
+    // flattens color contrast (raising this multiply-based value instead is the correct fix - since
+    // multiplication preserves ratios, white stays white and brown stays brown while both get
+    // brighter). 3.0 was the first real-machine-verified value.
     public static float RangeScale = 1.1f;
 
-    // 2026-08-08 (Tanossy指摘「黄色い明りが強すぎる」): LightConverter.WhiteBalanceShiftは
-    // Point Lightの色だけを白側へ寄せるため、ベイクライトマップ(元々暖色ライトで焼かれた
-    // データ)自体の色味には効かない。SecondaryAlbedoは乗算なので、この色付きベイクデータが
-    // 部屋全体の色調を暖色側に引っ張り続けていた。1.0=色そのまま(変更なし)、0.0=完全に
-    // 彩度ゼロ(desaturate=trueと同じ)。0.5は最初の実機検証値(色味は残しつつ暖色を抑える)。
+    // 2026-08-08 (per Tanossy's feedback: "the yellow light is too strong"): LightConverter.
+    // WhiteBalanceShift only pulls Point Light colors toward white, so it has no effect on the tint
+    // of the baked lightmap itself (data that was originally baked with warm-colored lights).
+    // Because SecondaryAlbedo is a multiply, this tinted bake data kept pulling the whole room's
+    // color tone toward warm. 1.0 = color unchanged, 0.0 = fully desaturated (equivalent to
+    // desaturate=true). 0.5 was the first real-machine-verified value (keeps some color character
+    // while suppressing the warm cast).
     public static float ColorSaturationCompensation = 0.6f;
 
     // ResoniteLink can drop the WebSocket while importing very large decoded lightmap PNGs. Keep
     // this preview export small enough for reliable send/retry while preserving the same atlas UVs.
     //
-    // 2026-07-14: 256でも複数回切断が再発したため、いったん64まで縮小(256の1/16の画素数)。ただし
-    // 実機で「64は複数オブジェクト分のライトマップアトラスを潰しすぎてブロック状のジャギーが出る」
-    // ことが視覚的に確認された(2026-07-30、Tanossy報告のスクリーンショット)。
+    // 2026-07-14: disconnects recurred multiple times even at 256, so this was temporarily shrunk
+    // to 64 (1/16th the pixel count of 256). However, it was then visually confirmed on real
+    // hardware that "64 crushes a multi-object lightmap atlas too far and produces blocky jagged
+    // artifacts" (2026-07-30, from a screenshot Tanossy reported).
     //
-    // 2026-07-30の再検討: ResoniteLink OSSソース本体(https://github.com/Yellow-Dog-Man/ResoniteLink
-    // のLinkInterface.cs)を実際に読んだ結果、SendMessageに排他ロックが無くBinaryPayloadMessageの
-    // ヘッダ/本体2送信が非アトミックであることは確認できたが、我々のSDK側の呼び出し経路
-    // (AssetConverter.Convert/ProcessConversions/SendOperationBatch)は全て`.Wait()`等で同期ブロック
-    // しており、自分のコードから並行SendMessage呼び出しが発生する経路は見当たらなかった。つまり
-    // 「ペイロードを縮めれば競合窓が縮む」という7/14時点の説明は前提(自コードの並行呼び出し)が
-    // 崩れており、正確な因果関係は未確定(.NET ClientWebSocketの自動KeepAlive Pingが長時間送信と
-    // 衝突する等、他の仮説も未検証のまま)。また7/14以降にResonite側の重複スロット・二重Destroy等の
-    // 不安定要因を複数根治済みなので、当時より状況が変わっている可能性がある。
-    // 実機検証のため256へ戻す(見た目の劣化と切断リスクのバランスを見て、安定すればさらに引き上げ検討)。
+    // 2026-07-30 re-examination: after actually reading the ResoniteLink OSS source itself
+    // (https://github.com/Yellow-Dog-Man/ResoniteLink's LinkInterface.cs), it was confirmed that
+    // SendMessage has no exclusive lock and BinaryPayloadMessage's header/body two-part send is
+    // non-atomic - but every call path on our SDK side (AssetConverter.Convert/
+    // ProcessConversions/SendOperationBatch) synchronously blocks via `.Wait()` etc., and no path
+    // was found where our own code would issue concurrent SendMessage calls. In other words, the
+    // 7/14 explanation ("shrinking the payload shrinks the race window") rested on a premise
+    // (concurrent calls from our own code) that doesn't actually hold, and the true causal
+    // relationship remains unconfirmed (other hypotheses, such as .NET ClientWebSocket's automatic
+    // KeepAlive Ping colliding with a long-running send, also remain unverified). Also, since 7/14
+    // several instability factors on the Resonite side (duplicate slots, double-Destroy, etc.) have
+    // been fixed at the root, so the situation may have changed since then.
+    // Reverting to 256 for real-machine verification (weighing visual degradation against
+    // disconnect risk; consider raising it further once stability is confirmed).
     public static int MaxPreviewTextureSize = 256;
 
     /// <summary>
@@ -114,13 +123,15 @@ public static class LightmapDecoder
     /// source lightmap's contents changed since the last decode) as needed. Returns null if
     /// decoding fails or the decode shader can't be found.
     ///
-    /// 2026-08-08 (Tanossy指摘「ソファとベッドの色が全然違う」): <paramref name="desaturate"/>=true
-    /// で、色情報を捨ててルミナンスのみをRGB全チャンネルに複製したグレースケール版を返す。
-    /// BakedLightmapStandardConverterのAdditiveFillStrength(加算フィル)が、各オブジェクトの
-    /// ベイクデータの実際の色(窓際=寒色/ランプ付近=暖色)をそのまま加算していたため、
-    /// オブジェクトごとに別々の色被りが生じていた — Unityの本物のGIはもっと滑らかに混ざるため
-    /// ここまでは分かれない。加算フィル側だけこのグレースケール版を使い、乗算側(SecondaryAlbedo)
-    /// は従来通りフルカラーのままにすることで、「明るさだけ足す」を実現する。
+    /// 2026-08-08 (per Tanossy's feedback: "the sofa and the bed are completely different colors"):
+    /// when <paramref name="desaturate"/>=true, this discards color information and returns a
+    /// grayscale version with luminance alone duplicated across all RGB channels.
+    /// BakedLightmapStandardConverter's AdditiveFillStrength (additive fill) was adding each
+    /// object's actual bake-data color as-is (cool near windows / warm near lamps), which produced
+    /// a different color cast per object - real Unity GI blends far more smoothly and would never
+    /// diverge this much. Using this grayscale version for the additive-fill side only, while
+    /// leaving the multiply side (SecondaryAlbedo) full-color as before, achieves "add brightness
+    /// only".
     /// </summary>
     public static Texture2D GetDecodedLightmap(string sceneGuid, int lightmapIndex, Texture2D sourceLightmap, bool desaturate = false)
     {
@@ -134,8 +145,8 @@ public static class LightmapDecoder
             var result = GetDecodedLightmapInner(sceneGuid, lightmapIndex, sourceLightmap, desaturate);
 
             // Only persist when this specific call actually wrote/re-wrote a decoded PNG asset -
-            // a cache hit (memory or AssetDatabase) has nothing new to save (Loki 2nd-pass review
-            // 指摘8).
+            // a cache hit (memory or AssetDatabase) has nothing new to save (Loki's 2nd-pass review,
+            // item 8).
             if (_createdNewAssetThisCall)
                 AssetDatabase.SaveAssets();
 
@@ -230,9 +241,10 @@ public static class LightmapDecoder
                 // UnityCG.cginc) per active build target, and that choice isn't observable from
                 // the baked texture's pixel format alone through public Editor APIs. v1 assumes
                 // RGBM, matching the Editor/Standalone default and the vast majority of real-world
-                // lightmap bakes. See the "残る実機検証依存項目" note in this feature's design
-                // notes: confirm on a project actually using Double-LDR mobile lightmaps (mode 2
-                // in LightmapDecode.shader) before relying on this for such a target.
+                // lightmap bakes. See the "remaining items dependent on real-machine verification"
+                // note in this feature's design notes: confirm on a project actually using
+                // Double-LDR mobile lightmaps (mode 2 in LightmapDecode.shader) before relying on
+                // this for such a target.
                 return 1f;
         }
     }
@@ -241,7 +253,7 @@ public static class LightmapDecoder
     /// Builds the decodeInstructions float4 LightmapDecode.shader's frag() needs for the given
     /// <paramref name="decodeMode"/> (see <see cref="DetermineDecodeMode"/>), depending on the
     /// active project color space. Pushed to the shader as the <c>_DecodeInstructions</c> material
-    /// property instead of being hardcoded as shader-side literals (Loki 2nd-pass review 指摘1),
+    /// property instead of being hardcoded as shader-side literals (Loki's 2nd-pass review, item 1),
     /// and mirrors the *real* constants read directly out of this Editor install's own
     /// UnityCG.cginc (Editor/Data/CGIncludes/UnityCG.cginc) rather than assumed values:
     ///  - DecodeLightmapRGBM's x is UnityCG.cginc's own LIGHTMAP_RGBM_SCALE #define (5.0), which is
@@ -278,7 +290,7 @@ public static class LightmapDecoder
 
         var decodeMode = DetermineDecodeMode(source.format);
 
-        // Loki 2nd-pass review 指摘1: which project color space (Linear vs Gamma) is active
+        // Loki's 2nd-pass review, item 1: which project color space (Linear vs Gamma) is active
         // changes BOTH which decodeInstructions the shader below should use AND whether the
         // linear->gamma conversion further down needs to happen at all - see the comment on that
         // conversion loop for the Gamma-space rationale.
@@ -351,7 +363,7 @@ public static class LightmapDecoder
         // 8-bit sRGB ("Color") texture and the GPU will decode it back to linear on sample, same
         // as every other linear-space texture in the project.
         //
-        // Gamma color space projects (Loki 2nd-pass review 指摘1 - double gamma baking): there is
+        // Gamma color space projects (Loki's 2nd-pass review, item 1 - double gamma baking): there is
         // no separate linear working space at all in a Gamma-space project - "color" values are
         // gamma-space all the way through Unity's own pipeline, which is exactly why
         // DecodeLightmapRGBM's UNITY_COLORSPACE_GAMMA branch (see _DecodeInstructions above, and
@@ -360,7 +372,7 @@ public static class LightmapDecoder
         // final gamma-space values in that case; applying c.gamma on top of them here would
         // gamma-correct an already-gamma-space value a SECOND time, which is this exact bug.
         //
-        // Loki 3rd-pass review (指摘1 follow-up): the paragraph above only holds for decodeMode
+        // Loki's 3rd-pass review (item 1 follow-up): the paragraph above only holds for decodeMode
         // 1 (RGBM) and 2 (Double-LDR) - both of those decode functions themselves adjust their
         // output based on UNITY_COLORSPACE_GAMMA (see LightmapDecode.shader), which is what makes
         // skipping the extra c.gamma safe/correct for them in a Gamma project. decodeMode 0 (HDR
@@ -372,7 +384,7 @@ public static class LightmapDecoder
         // decodeMode selected the RGBM/Double-LDR path (decodeMode >= 0.5).
         bool skipGammaConversion = isGammaColorSpace && decodeMode >= 0.5f;
 
-        // 2026-07-12 diagnostic addition (バグハンター指摘, ダイダロス対応): a full tonemapping
+        // 2026-07-12 diagnostic addition (per the Bug Hunter's feedback, addressed by Daedalus): a full tonemapping
         // implementation is out of scope for this pass (see RangeScale's own doc comment - v1
         // only offers a manual exposure knob), but the silent, unwarned clamp below has been
         // measured on real bakes to actually clip real content (real, measured Unity output has
@@ -458,7 +470,7 @@ public static class LightmapDecoder
 
         AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
 
-        // Loki 2nd-pass review 指摘5: GetAtPath can legitimately return null immediately after
+        // Loki's 2nd-pass review, item 5: GetAtPath can legitimately return null immediately after
         // ImportAsset (e.g. the path is outside any recognized import pipeline, or the import
         // itself failed/was rejected) - a hard cast of null used to NRE right here instead of
         // failing in a way the caller could react to. Report and bail out explicitly instead;
