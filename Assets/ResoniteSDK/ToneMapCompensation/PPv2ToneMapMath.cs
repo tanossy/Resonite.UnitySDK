@@ -87,6 +87,14 @@ public static class PPv2ToneMapMath
     static bool s_resolved;
     static ResolvedSettings s_settings;
 
+    // 2026-08-08 (Tanossy指摘「コントラストが足りない」): シーンのPost Processing Volumeの
+    // 実測値はcontrast=2(PPv2スライダー値)——実際の乗数に直すと`2/100+1=1.02`とほぼ無効に近い。
+    // Unity側はAmbient Occlusion/Bloom等トーンマッピング以外の要因で見た目のメリハリが出ている
+    // 可能性が高く、シーンのPPv2設定をそのまま模しても同じ迫力は出ない。Resonite送信専用の
+    // 追加コントラスト係数をここに設け、シーンの(ほぼ無効な)ContrastMultiplierに掛け合わせる。
+    // 1.0=追加なし。1.4は最初の実機検証値。
+    public static float ResoniteExtraContrast = 1.4f;
+
     public static ResolvedSettings GetSettings()
     {
         if (!s_resolved)
@@ -118,7 +126,7 @@ public static class PPv2ToneMapMath
 
             s_settings.Found = true;
 
-            s_settings.ContrastMultiplier = cg.contrast.value / 100f + 1f;
+            s_settings.ContrastMultiplier = (cg.contrast.value / 100f + 1f) * ResoniteExtraContrast;
             s_settings.SaturationMultiplier = cg.saturation.value / 100f + 1f;
             s_settings.HueShift01 = cg.hueShift.value / 360f;
             s_settings.ColorFilter = new Vector3(cg.colorFilter.value.r, cg.colorFilter.value.g, cg.colorFilter.value.b);
@@ -238,6 +246,23 @@ public static class PPv2ToneMapMath
             c = NeutralTonemap(c);
 
         return new Vector3(Mathf.Max(0f, c.x), Mathf.Max(0f, c.y), Mathf.Max(0f, c.z));
+    }
+
+    // 2026-08-08 (Tanossy指摘「茶色味が足りない」): ApplyGrading()フル適用(Contrast込み)は
+    // ContrastMultiplier(1.4×約1.02≈1.428)が「_Color=白(1,1,1)」のマテリアルを更に白へ
+    // 押し上げてしまい(ピボットACEScc_MIDGRAY=0.4136より上にある値はcontrastを掛けるほど
+    // 明るい側へ)、テクスチャ本来の色を洗い流す逆効果だったため、MaterialGradingEnabledごと
+    // 無効化していた。しかしそれによりUnity元シーンのSaturation設定(=10 → 1.1倍という
+    // 穏やかな彩度ブースト)も道連れで失われ、ソファの茶色が「素の彩度」のまま出ていた。
+    // Contrast/WhiteBalance/Tonemapは経由せず、Saturationだけを独立して適用する。
+    public static Vector3 ApplySaturationOnly(Vector3 linearColor)
+    {
+        var settings = GetSettings();
+
+        if (!settings.Found)
+            return linearColor;
+
+        return Saturation(linearColor, settings.SaturationMultiplier);
     }
 
     // Reflection Probeの強度を代表輝度における実際のNeutralTonemap圧縮率で減衰させる。

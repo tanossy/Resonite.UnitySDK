@@ -21,20 +21,35 @@ using UnityEngine;
 [MaterialConverter(false, "ResoniteSDK/BakedLightmapStandard")]
 public class BakedLightmapStandardConverter : ResoniteMaterialConverter
 {
-    // Experimental toggle for the in-world verification pass. Default (false) folds the baked
-    // lightmap into SecondaryAlbedoTexture, which multiplies with AlbedoTexture the same way
-    // Unity's baked lightmap multiplies with the albedo. If real-machine (ResoniteLink) testing
-    // shows PBS_MultiUV_Metallic's SecondaryAlbedo compositing doesn't match that (e.g. it turns
-    // out to be additive, or blended differently), flip this to true to instead route the
-    // lightmap through the additive SecondaryEmissiveMap slot.
-    //
-    // 2026-08-08 (Tanossy指摘「暗い・ギラつく」への対応、クヴァシル調査で裏付け): Resoniteには
-    // ベイクGI機構自体が存在しない(実証済み)。SecondaryAlbedo乗算合成は「照らされて見える色」を
-    // 作るだけで、実際のシーン照明を追加しない — むしろベイクデータ(実測平均linear 0.06〜0.14、
-    // すなわち1未満)を乗算するので必ず暗くなる方向にしか働かない。かつ環境光/環境スペキュラーが
-    // 皆無なため、今回追加した実ライトのハイライトだけが唐突に浮く。SecondaryEmissiveMap経由の
-    // 加算合成に切り替え、ベイクデータを「明るさを足す疑似アンビエント光」として扱う実機検証。
-    public static bool EmissiveLightmapMode = true;
+    // 2026-08-08 (Tanossy指摘「暗い・ギラつく」への対応、続き): 乗算のみ→暗すぎ、加算のみ→色が
+    // 白飛び、という二択がどちらも実機で不合格だったため、ハイブリッドに変更。SecondaryAlbedo
+    // 乗算(色の忠実度を保つ本来の合成)は常時維持しつつ、それとは別にSecondaryEmissiveMap経由で
+    // 同じベイクデータを控えめな強度で追加し、Unity側のベイクGIが担っていた「陰を持ち上げる
+    // アンビエントフィル」を近似する。この値は乗算成分に対する加算成分の相対的な強さ
+    // (0=純粋乗算のみ、1=旧EmissiveLightmapMode=true相当のフル加算)。0.35は初回の勘所であり、
+    // 実機で見た目を確認しながら調整する前提の未確定値。
+    // 2026-08-08 (Tanossy指摘「白は白っぽく、茶は茶っぽくコントラストが無いと困る」): 加算フィルは
+    // 原理的にコントラストを潰す — 暗い色に一定量を足すと明るい色との比率が縮まり、
+    // 白と茶色の差が薄れる(9:1の反射率差が、+0.3を足すと2.5:1まで縮む、という単純な算数)。
+    // 乗算(SecondaryAlbedo)は比率を保ったまま明暗だけ変わるので、色の書き分けを壊さない。
+    // 加算フィルは0に戻し、明るさの底上げはLightmapDecoder.RangeScale(乗算前のゲイン)側で行う
+    // 方針に転換。
+    public static float AdditiveFillStrength = 0.0f;
+
+    // 2026-08-08 (Tanossy指摘、続き): LightConverter.IntensityMultiplierでライトを明るくした分、
+    // 同じSmoothness値でもハイライトが比例して強く出るようになった(実機確認: ベッドの掛け布団が
+    // 金属光沢のように見えた)。この値はスカラーSmoothness経路(MetallicMap未設定のマテリアル、
+    // 例: bed01)にのみ効く — MetallicMapがあるマテリアル(couch01等、テクスチャのアルファ経由で
+    // Smoothnessが決まる)には別途アルファ側の減衰が必要(couch01_MetallicSmoothness等の
+    // 再生成時に反映)。0.6は初回の勘所。
+    public static float SmoothnessCompensation = 0.05f;
+
+    // 2026-08-08追記(Tanossy指摘「黒が黒でない」): Smoothness補正だけでは金属マテリアル
+    // (例: black metal, Metallic=0.844)のギラつきを抑えきれなかった——金属は拡散反射をほぼ
+    // 持たず、見た目のほぼ全てがスペキュラー反射なので、Smoothnessをいくら下げても
+    // 「反射が鈍くなる」だけで「反射しなくなる」わけではない。AlbedoColorを真っ黒にしても
+    // 金属面は明るい光源を映し込み続ける。Metallic自体も送信時に減衰させる。
+    public static float MetallicCompensation = 0.0f;
 
     // Verification mode for large baked scenes. The first in-world check only needs geometry,
     // material colors, and the baked lightmap; uploading every source albedo/normal/metallic/
@@ -112,8 +127,8 @@ public class BakedLightmapStandardConverter : ResoniteMaterialConverter
         data.EmissionMapUV = 0;
 
         // --- Metallic / Smoothness (UV0) ---
-        data.Metallic = material.GetFloat("_Metallic");
-        data.Smoothness = material.GetFloat("_Glossiness");
+        data.Metallic = material.GetFloat("_Metallic") * Mathf.Clamp01(MetallicCompensation);
+        data.Smoothness = material.GetFloat("_Glossiness") * Mathf.Clamp01(SmoothnessCompensation);
         data.MetallicMap = LightmapPreviewUploadOnly ? null : context.GetITexture2D(material.GetTexture("_MetallicGlossMap"));
         data.MetallicMapScale = mainTexScale;
         data.MetallicMapOffset = mainTexOffset;
@@ -123,25 +138,35 @@ public class BakedLightmapStandardConverter : ResoniteMaterialConverter
         // Written by LightmapMaterialCache from LightmapSettings.lightmaps[i].lightmapColor and
         // renderer.lightmapScaleOffset onto this marker material's _BakedLightmap / _BakedLightmapST.
         var bakedLightmap = context.GetITexture2D(material.GetTexture("_BakedLightmap"));
+        // Desaturated (luma-only) companion, see LightmapMaterialCache/LightmapDecoder's
+        // desaturate doc comments - used for the additive fill below so per-object baked-lightmap
+        // hue (window=cool, lamp=warm) doesn't leak into the brightness-only approximation.
+        var bakedLightmapGray = context.GetITexture2D(material.GetTexture("_BakedLightmapGray"));
         var lightmapScaleOffset = material.GetVector("_BakedLightmapST");
         var lightmapScale = new Vector2(lightmapScaleOffset.x, lightmapScaleOffset.y);
         var lightmapOffset = new Vector2(lightmapScaleOffset.z, lightmapScaleOffset.w);
 
-        if (EmissiveLightmapMode)
-        {
-            data.SecondaryEmissiveMap = bakedLightmap;
-            data.SecondaryEmissionMapScale = lightmapScale;
-            data.SecondaryEmissionMapOffset = lightmapOffset;
-            data.SecondaryEmissionMapUV = 1;
-            data.SecondaryEmissiveColor = Color.white.ToColorX_sRGB();
-        }
-        else
-        {
-            data.SecondaryAlbedoTexture = bakedLightmap;
-            data.SecondaryAlbedoScale = lightmapScale;
-            data.SecondaryAlbedoOffset = lightmapOffset;
-            data.SecondaryAlbedoUV = 1;
-        }
+        // Multiplicative half: always on, preserves the base albedo's own color instead of
+        // washing it toward the lightmap's own hue/brightness.
+        data.SecondaryAlbedoTexture = bakedLightmap;
+        data.SecondaryAlbedoScale = lightmapScale;
+        data.SecondaryAlbedoOffset = lightmapOffset;
+        data.SecondaryAlbedoUV = 1;
+
+        // Additive half: a damped, desaturated copy of the same data, approximating the ambient
+        // fill Unity's baked GI would otherwise provide (Resonite has no baked-GI pipeline of its
+        // own). AdditiveFillStrength=0 recovers the old pure-multiply behavior; 1 recovers the old
+        // pure-additive (EmissiveLightmapMode=true) behavior applied on top of the multiply.
+        // Desaturated rather than full-color: the raw baked lightmap carries each object's own
+        // local color (window-side=cool, lamp-side=warm), and adding that directly made
+        // differently-lit objects (couch near the window vs. bed near the lamp) diverge in hue
+        // from each other in a way Unity's actual GI light transport never does.
+        data.SecondaryEmissiveMap = bakedLightmapGray;
+        data.SecondaryEmissionMapScale = lightmapScale;
+        data.SecondaryEmissionMapOffset = lightmapOffset;
+        data.SecondaryEmissionMapUV = 1;
+        var fill = Mathf.Clamp01(AdditiveFillStrength);
+        data.SecondaryEmissiveColor = new Color(fill, fill, fill, 1f).ToColorX_sRGB();
 
         return PBS.Data;
     }

@@ -45,6 +45,13 @@ Shader "ResoniteSDK/BakedLightmapStandard"
         // and renderer.lightmapScaleOffset.
         _BakedLightmap ("Baked Lightmap", 2D) = "white" {}
         _BakedLightmapST ("Lightmap ScaleOffset", Vector) = (1,1,0,0)
+
+        // 2026-08-08: desaturated (luma-only) companion of _BakedLightmap, same UV/ScaleOffset.
+        // Not sampled by this preview-only fragment shader (see file header) - property storage
+        // only, read back by BakedLightmapStandardConverter for the additive fill slot so per-
+        // object baked-lightmap color casts (window=cool, lamp=warm) don't leak into the
+        // brightness-only ambient approximation.
+        _BakedLightmapGray ("Baked Lightmap (Desaturated)", 2D) = "white" {}
     }
 
     SubShader

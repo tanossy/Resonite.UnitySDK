@@ -64,7 +64,21 @@ public static class LightmapDecoder
     // so more of it survives the clamp instead of blowing out to solid white. Default 1.0 = no
     // adjustment. This is a static, process-wide knob rather than a per-lightmap one - v1 doesn't
     // attempt per-lightmap auto-exposure.
-    public static float RangeScale = 1.0f;
+    //
+    // 2026-08-08 (Tanossy指摘「白は白っぽく、茶は茶っぽくコントラストが無いと困る」への対応):
+    // 実測でこのシーンのベイクデータは線形平均0.06〜0.14程度と暗く、SecondaryAlbedo乗算だけでは
+    // 部屋全体が暗くなりすぎていた。加算フィル(BakedLightmapStandardConverter.
+    // AdditiveFillStrength)で底上げする案は色のコントラストを潰すため却下(乗算前提のこの値を
+    // 上げる方が正しい――乗算は比率を保つので、白は白のまま・茶は茶のまま明るくなる)。
+    // 3.0は最初の実機検証値。
+    public static float RangeScale = 1.1f;
+
+    // 2026-08-08 (Tanossy指摘「黄色い明りが強すぎる」): LightConverter.WhiteBalanceShiftは
+    // Point Lightの色だけを白側へ寄せるため、ベイクライトマップ(元々暖色ライトで焼かれた
+    // データ)自体の色味には効かない。SecondaryAlbedoは乗算なので、この色付きベイクデータが
+    // 部屋全体の色調を暖色側に引っ張り続けていた。1.0=色そのまま(変更なし)、0.0=完全に
+    // 彩度ゼロ(desaturate=trueと同じ)。0.5は最初の実機検証値(色味は残しつつ暖色を抑える)。
+    public static float ColorSaturationCompensation = 0.6f;
 
     // ResoniteLink can drop the WebSocket while importing very large decoded lightmap PNGs. Keep
     // this preview export small enough for reliable send/retry while preserving the same atlas UVs.
@@ -99,8 +113,16 @@ public static class LightmapDecoder
     /// of the scene identified by <paramref name="sceneGuid"/>, decoding (or re-decoding, if the
     /// source lightmap's contents changed since the last decode) as needed. Returns null if
     /// decoding fails or the decode shader can't be found.
+    ///
+    /// 2026-08-08 (Tanossy指摘「ソファとベッドの色が全然違う」): <paramref name="desaturate"/>=true
+    /// で、色情報を捨ててルミナンスのみをRGB全チャンネルに複製したグレースケール版を返す。
+    /// BakedLightmapStandardConverterのAdditiveFillStrength(加算フィル)が、各オブジェクトの
+    /// ベイクデータの実際の色(窓際=寒色/ランプ付近=暖色)をそのまま加算していたため、
+    /// オブジェクトごとに別々の色被りが生じていた — Unityの本物のGIはもっと滑らかに混ざるため
+    /// ここまでは分かれない。加算フィル側だけこのグレースケール版を使い、乗算側(SecondaryAlbedo)
+    /// は従来通りフルカラーのままにすることで、「明るさだけ足す」を実現する。
     /// </summary>
-    public static Texture2D GetDecodedLightmap(string sceneGuid, int lightmapIndex, Texture2D sourceLightmap)
+    public static Texture2D GetDecodedLightmap(string sceneGuid, int lightmapIndex, Texture2D sourceLightmap, bool desaturate = false)
     {
         if (sourceLightmap == null)
             return null;
@@ -109,7 +131,7 @@ public static class LightmapDecoder
 
         try
         {
-            var result = GetDecodedLightmapInner(sceneGuid, lightmapIndex, sourceLightmap);
+            var result = GetDecodedLightmapInner(sceneGuid, lightmapIndex, sourceLightmap, desaturate);
 
             // Only persist when this specific call actually wrote/re-wrote a decoded PNG asset -
             // a cache hit (memory or AssetDatabase) has nothing new to save (Loki 2nd-pass review
@@ -127,19 +149,19 @@ public static class LightmapDecoder
         }
     }
 
-    static Texture2D GetDecodedLightmapInner(string sceneGuid, int lightmapIndex, Texture2D sourceLightmap)
+    static Texture2D GetDecodedLightmapInner(string sceneGuid, int lightmapIndex, Texture2D sourceLightmap, bool desaturate)
     {
         var folder = LightmapVariantStorage.GetSceneFolder(sceneGuid);
         LightmapVariantStorage.EnsureFolder(folder);
 
-        var path = $"{folder}/LMTex_{lightmapIndex}.png";
+        var path = desaturate ? $"{folder}/LMTex_{lightmapIndex}_gray.png" : $"{folder}/LMTex_{lightmapIndex}.png";
 
         // Texture2D.imageContentsHash is a content hash of the texture's actual pixel data, so it
         // changes whenever the lightmap is re-baked (even if the file path/GUID stays the same),
         // and stays stable across Editor sessions/domain reloads for an unchanged bake. We record
         // it in the decoded PNG's own TextureImporter.userData so a later call can tell whether
         // it needs to re-decode or can just hand back the existing asset.
-        var sourceHash = $"{sourceLightmap.imageContentsHash}|range:{RangeScale:0.########}|max:{MaxPreviewTextureSize}";
+        var sourceHash = $"{sourceLightmap.imageContentsHash}|range:{RangeScale:0.########}|max:{MaxPreviewTextureSize}|gray:{desaturate}|sat:{ColorSaturationCompensation:0.###}";
 
         // Memory front-cache lookup first. `cached != null` uses Unity's overloaded null check,
         // so a destroyed/unloaded Texture2D (e.g. after an AssetDatabase.DeleteAsset elsewhere, or
@@ -161,7 +183,7 @@ public static class LightmapDecoder
             return existing; // Source lightmap contents are unchanged since the last decode.
         }
 
-        var decoded = DecodeAndSave(path, sourceLightmap, sourceHash);
+        var decoded = DecodeAndSave(path, sourceLightmap, sourceHash, desaturate);
 
         if (decoded != null)
         {
@@ -244,7 +266,7 @@ public static class LightmapDecoder
         return new Vector4(isGammaColorSpace ? 2.0f : Mathf.Pow(2.0f, 2.2f), 0f, 0f, 0f); // Mode 2: Double-LDR.
     }
 
-    static Texture2D DecodeAndSave(string path, Texture2D source, string sourceHash)
+    static Texture2D DecodeAndSave(string path, Texture2D source, string sourceHash, bool desaturate)
     {
         var shader = Shader.Find(DecodeShaderName);
 
@@ -374,6 +396,27 @@ public static class LightmapDecoder
                 maxChannelObserved = pixelMax;
             if (pixelMax > 1f)
                 clippedPixelCount++;
+
+            if (desaturate)
+            {
+                // Rec.709 luma weights, applied in linear space before the clamp/gamma steps
+                // below so the brightness-only result still goes through the exact same encode
+                // path as the color version (same clamp semantics, same gamma curve).
+                float luma = (0.2126f * scaledR) + (0.7152f * scaledG) + (0.0722f * scaledB);
+                scaledR = scaledG = scaledB = luma;
+            }
+            else if (ColorSaturationCompensation < 1f)
+            {
+                // Partial desaturation of the "color" (multiply) variant itself - see
+                // ColorSaturationCompensation's own doc comment for why this exists (the baked
+                // lightmap's own warm hue, independent of LightConverter.WhiteBalanceShift which
+                // only touches live Light components).
+                float luma = (0.2126f * scaledR) + (0.7152f * scaledG) + (0.0722f * scaledB);
+                float sat = Mathf.Clamp01(ColorSaturationCompensation);
+                scaledR = Mathf.Lerp(luma, scaledR, sat);
+                scaledG = Mathf.Lerp(luma, scaledG, sat);
+                scaledB = Mathf.Lerp(luma, scaledB, sat);
+            }
 
             c.r = Mathf.Clamp01(scaledR);
             c.g = Mathf.Clamp01(scaledG);

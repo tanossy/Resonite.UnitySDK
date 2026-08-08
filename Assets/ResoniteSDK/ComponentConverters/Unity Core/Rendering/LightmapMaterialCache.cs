@@ -380,6 +380,14 @@ public static class LightmapMaterialCache
         changed |= SetTextureIfChanged(variant, "_BakedLightmap", bakedLightmapTex);
         changed |= SetVectorIfChanged(variant, "_BakedLightmapST", bakedLightmapST);
 
+        // 2026-08-08: desaturated companion for BakedLightmapStandardConverter's additive fill
+        // slot (see LightmapDecoder.GetDecodedLightmap's desaturate param doc comment). Decoded
+        // from the same source lightmapData.lightmapColor as bakedLightmapTex above, independent
+        // of the directional-lightmap override branch above (the desaturated fill approximates
+        // ambient brightness only, so it doesn't need the per-renderer normal-baked variant).
+        var bakedLightmapGrayTex = LightmapDecoder.GetDecodedLightmap(sceneGuid, lightmapIndex, lightmapData.lightmapColor, desaturate: true);
+        changed |= SetTextureIfChanged(variant, "_BakedLightmapGray", bakedLightmapGrayTex);
+
         if (changed)
             EditorUtility.SetDirty(variant);
 
