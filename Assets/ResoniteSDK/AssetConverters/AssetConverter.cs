@@ -7,6 +7,8 @@ using UnityEngine;
 
 public abstract class AssetConverter : MonoBehaviour
 {
+    const int ConversionTimeoutMilliseconds = 60000;
+
     public AssetMessagePostProcessor PostProcessor;
 
     public ulong LastTimestamp;
@@ -20,7 +22,7 @@ public abstract class AssetConverter : MonoBehaviour
         // Run any postprocessing
         PostProcessor?.Process(data);
 
-        Task.Run(async () =>
+        var conversionTask = Task.Run(async () =>
         {
             try
             {
@@ -50,7 +52,17 @@ public abstract class AssetConverter : MonoBehaviour
                 ClearProviderURL();
                 throw;
             }
-        }).Wait();
+        });
+
+        if (!conversionTask.Wait(ConversionTimeoutMilliseconds))
+        {
+            ClearProviderURL();
+            throw new TimeoutException(
+                $"Timed out converting {AssetClass} {name} after {ConversionTimeoutMilliseconds / 1000} seconds. " +
+                "ResoniteLink did not return from asset upload/provider update; reconnect and retry this pass.");
+        }
+
+        conversionTask.Wait();
 
         // Store the timestamp only after both the upload and provider URL update succeeded. Failed
         // conversions must not look cached/current on the next send.

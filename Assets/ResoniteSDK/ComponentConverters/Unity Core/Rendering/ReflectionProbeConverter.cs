@@ -39,7 +39,18 @@ public static class ReflectionProbeHelper
         }
 
         resonite.Importance = unity.importance;
-        resonite.Intensity = unity.intensity;
+
+        // 2026-08-08 (Tanossy指摘「Reflection Probeが強すぎる」への対応、案2):
+        // Resonite(Renderite)は主カメラでポスト処理のトーンマッピングを一切行わない
+        // (2026-07-30 Renderite.Unity.Renderer調査で確定)。Unity側ではHDRの明るい反射成分が
+        // Scene ViewのPPv2 NeutralTonemapperで圧縮されて見えるが、Resonite側はそれが無いため
+        // 同じIntensity値でも反射が生の輝度のまま出て「ぎらつく」。単一スカラー係数でカーブ全体を
+        // 正確に再現することはできないが(詳細はPPv2ToneMapMath.ComputeReflectionProbeCompensationFactor
+        // のコメント参照)、実際のNeutralTonemap計算式に基づいた減衰係数を掛けることで近似する。
+        // ToneMapCompensationState.Enabled = false で無効化可能。
+        resonite.Intensity = unity.intensity * (ToneMapCompensationState.Enabled
+            ? PPv2ToneMapMath.ComputeReflectionProbeCompensationFactor()
+            : 1f);
 
         resonite.BlendDistance = unity.blendDistance;
         resonite.BoxSize = unity.size;

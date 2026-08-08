@@ -347,42 +347,38 @@ public class AssetConversionManager
 
     public void ProcessConversions(LinkInterface link)
     {
-        try
+        // 2026-08-08 (Tanossy指摘): EditorUtility.DisplayProgressBar/ClearProgressBarをこのループから
+        // 完全に撤去した。このダイアログはUnity Editorのメインスレッド上でモーダル的なGUIイベント
+        // ポンプを伴うため、ちょうどこのループが呼ぶjob.Convert()内部の非同期WebSocket送信
+        // (Task.Run(...).Wait()でメインスレッドをブロックしつつ、別スレッドでSendAsync/ReceiverHandlerが
+        // 動く構造)と時間的に重なる。ResoniteLink.dll側の未同期レースコンディション
+        // (SendMessage送信中にReceiverHandlerが"no pending response with this ID"で誤爆し
+        // _client.Dispose()する既知バグ、2026-07-30ソース読解で確定済み)の再現条件を、ダイアログの
+        // 描画/イベント処理が意図せず広げている可能性を切り分けるため、SDK本来の送受信ロジックとは
+        // 無関係なこのUI要素を除去し、干渉源から切り離す。
+        while (_scheduledConversions.Count > 0)
         {
-            int totalToConvert = _scheduledConversions.Count;
-
-            while (_scheduledConversions.Count > 0)
+            if (link == null || !link.IsConnected)
             {
-                if (link == null || !link.IsConnected)
-                {
-                    throw new InvalidOperationException("Asset conversion stopped because ResoniteLink is no longer connected. Reconnect and run Send Current Scene again; conversion state will be rebuilt.");
-                }
-
-                var progress = (totalToConvert - _scheduledConversions.Count) / (float)totalToConvert;
-
-                var job = _scheduledConversions.Dequeue();
-
-                EditorUtility.DisplayProgressBar("Converting assets...", $"{job.AssetClass}: {job.AssetName}", progress);
-
-                try
-                {
-                    job.Convert(Converter, link);
-                }
-                catch (Exception ex)
-                {
-                    throw new InvalidOperationException(
-                        $"Asset conversion stopped while converting {job.AssetClass} {job.AssetName}. ResoniteLink likely disconnected during asset upload. " +
-                        "Reconnect and run Send Current Scene again; conversion state will be rebuilt.",
-                        ex);
-                }
+                throw new InvalidOperationException("Asset conversion stopped because ResoniteLink is no longer connected. Reconnect and run Send Current Scene again; conversion state will be rebuilt.");
             }
 
-            // Once conversions are processed, clear this. This is only relevant before the conversions take place
-            _updatedAssetProviderRoots.Clear();
+            var job = _scheduledConversions.Dequeue();
+
+            try
+            {
+                job.Convert(Converter, link);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"Asset conversion stopped while converting {job.AssetClass} {job.AssetName}. ResoniteLink likely disconnected during asset upload. " +
+                    "Reconnect and run Send Current Scene again; conversion state will be rebuilt.",
+                    ex);
+            }
         }
-        finally
-        {
-            EditorUtility.ClearProgressBar();
-        }
+
+        // Once conversions are processed, clear this. This is only relevant before the conversions take place
+        _updatedAssetProviderRoots.Clear();
     }
 }

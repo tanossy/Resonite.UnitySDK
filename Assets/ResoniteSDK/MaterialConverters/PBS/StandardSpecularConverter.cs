@@ -25,7 +25,9 @@ public class StandardSpecularConverter : StandardBaseConverter<PBS_SpecularWrapp
         specColor.a = GetFloatOrDefault(material, "_Glossiness");
 
         data.SpecularColor = specColor.ToColorX_sRGB();
-        data.SpecularMap = context.GetITexture2D(GetTextureOrDefault(material, "_SpecGlossMap"));
+        data.SpecularMap = ConversionPassState.ShouldUploadSourceMaterialTextures
+            ? context.GetITexture2D(GetTextureOrDefault(material, "_SpecGlossMap"))
+            : null;
 
         return provider;
     }

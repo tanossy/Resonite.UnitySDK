@@ -69,14 +69,21 @@ public static class LightmapDecoder
     // ResoniteLink can drop the WebSocket while importing very large decoded lightmap PNGs. Keep
     // this preview export small enough for reliable send/retry while preserving the same atlas UVs.
     //
-    // 2026-07-14 (Tanossy指摘の追加調査): 256でも複数回切断が再発したため、根本原因をResoniteLink.dll
-    // (Plugins/ResoniteLink.dll, LinkInterface.cs相当・逆コンパイルで確認)側の未同期レースコンディション
-    // まで特定した。SendMessageの送信中(_client.SendAsync)と、別バックグラウンドTaskで動く
-    // ReceiverHandlerのエラー時_client.Dispose()が同じ_clientを介して競合しており、送信が長引くほど
-    // 「受信側で何か起きて負ける」窓が広がる。DLL自体は現行upstream/mainと同一(LFSハッシュ一致済み、
-    // パッチ不可)なのでUnity側で直接直せる余地はなく、ペイロードを縮めて送信時間=競合窓を短くするのが
-    // 現実的な緩和策。64に縮小(256の1/16の画素数)。
-    public static int MaxPreviewTextureSize = 64;
+    // 2026-07-14: 256でも複数回切断が再発したため、いったん64まで縮小(256の1/16の画素数)。ただし
+    // 実機で「64は複数オブジェクト分のライトマップアトラスを潰しすぎてブロック状のジャギーが出る」
+    // ことが視覚的に確認された(2026-07-30、Tanossy報告のスクリーンショット)。
+    //
+    // 2026-07-30の再検討: ResoniteLink OSSソース本体(https://github.com/Yellow-Dog-Man/ResoniteLink
+    // のLinkInterface.cs)を実際に読んだ結果、SendMessageに排他ロックが無くBinaryPayloadMessageの
+    // ヘッダ/本体2送信が非アトミックであることは確認できたが、我々のSDK側の呼び出し経路
+    // (AssetConverter.Convert/ProcessConversions/SendOperationBatch)は全て`.Wait()`等で同期ブロック
+    // しており、自分のコードから並行SendMessage呼び出しが発生する経路は見当たらなかった。つまり
+    // 「ペイロードを縮めれば競合窓が縮む」という7/14時点の説明は前提(自コードの並行呼び出し)が
+    // 崩れており、正確な因果関係は未確定(.NET ClientWebSocketの自動KeepAlive Pingが長時間送信と
+    // 衝突する等、他の仮説も未検証のまま)。また7/14以降にResonite側の重複スロット・二重Destroy等の
+    // 不安定要因を複数根治済みなので、当時より状況が変わっている可能性がある。
+    // 実機検証のため256へ戻す(見た目の劣化と切断リスクのバランスを見て、安定すればさらに引き上げ検討)。
+    public static int MaxPreviewTextureSize = 256;
 
     /// <summary>
     /// Clears the in-memory decoded-lightmap front cache. Called from

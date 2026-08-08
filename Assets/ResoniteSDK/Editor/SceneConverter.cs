@@ -57,15 +57,26 @@ public class SceneConverter : IConversionContext
 
     Dictionary<UnityEngine.Component, List<Action>> _deferedActions = new Dictionary<UnityEngine.Component, List<Action>>();
 
-    int _idPool;
     int _messageIndex;
+
+    // 2026-08-08 (実機で発覚): UniqueSessionIdはResoniteLinkのハンドシェイクがサーバー側から
+    // 割り当てる値で、こちら側で完全制御できない(再接続の仕方によっては同じ値が返ってくることが
+    // 実機で確認された)。_idPoolは旧来SceneConverterインスタンス単位でリセットされていたため、
+    // UniqueSessionIdが変わらないまま新しいSceneConverterが作られると、ID生成が完全に前回と
+    // 同じ文字列列("Unity_0__0"等)を再現し、まだサーバー側に残っている前回の同名オブジェクトと
+    // 衝突して"ID '...' is already in use"のFATAL ERRORでコンバータがIsCorrupted状態に陥る実害が
+    // あった(EnsureImportRootSlotの重複ツリー対策とは独立した別バグ)。プロセス全体で単調増加する
+    // staticカウンタに切り替え、SceneConverterが何度作り直されようと、このUnity Editorプロセスの
+    // 生存期間中は同じID文字列が二度と生成されないことを保証する。
+    static long _globalIdPool;
 
     public string AllocateId(IWorldElement o = null)
     {
         if (o is FrooxEngine.Slot)
             throw new ArgumentException($"Cannot allocate ID for a Slot object! This needs to be handled through transforms");
 
-        return $"Unity_{UniqueSessionId}_{o?.GetType().Name}_{_idPool++:X}";
+        var next = System.Threading.Interlocked.Increment(ref _globalIdPool) - 1;
+        return $"Unity_{UniqueSessionId}_{o?.GetType().Name}_{next:X}";
     }
 
     public string GetId(IWorldElement o)
@@ -622,6 +633,29 @@ public class SceneConverter : IConversionContext
     {
         if (_importRootSlot == null)
         {
+            // 2026-08-08 (Tanossy指摘「被せるはずだったよね？」): 以前はここで無条件に新規ID
+            // (AllocateId)を発行してAddSlotしていたため、再接続の度に(セッションIDが変わる度に)
+            // World Root直下へ全く別の「Unity Import」ツリーが並行して積み上がっていた
+            // (Update側の分岐は同一セッション内の2回目以降にしか効かない設計だったため)。
+            //
+            // 完全な差分更新(既存の子スロット1つ1つをIDで突き合わせて再利用する)は
+            // このSceneConverterインスタンス自体がセッション跨ぎの状態を持たない設計上、
+            // 大掛かりな再設計が必要になる。ここではそれよりシンプルで確実な方針を取る:
+            // 新しいセッションの最初の送信時に、World Root直下に既に同名("Unity Import")の
+            // スロットが無いか一度だけ問い合わせ、見つかったらそれを丸ごと削除してから
+            // 新規に作り直す。「差分更新」ではなく「掃除してから作り直す」だが、結果として
+            // 常にツリーが1つだけになるという、ユーザーから見た"被せる"効果は達成される。
+            var staleRootId = TryFindExistingImportRootSlotId();
+
+            if (staleRootId != null)
+            {
+                messages.Add(new RemoveSlot()
+                {
+                    MessageID = GetUniqueMessageId($"RemoveSlot_stale_{ImportRootSlotName}"),
+                    SlotID = staleRootId,
+                });
+            }
+
             _importRootSlot = new ResoniteLink.Slot();
 
             _importRootSlot.ID = AllocateId();
@@ -660,6 +694,42 @@ public class SceneConverter : IConversionContext
         messages.Add(message);
 
         return _importRootSlot.ID;
+    }
+
+    // Best-effort lookup for a pre-existing "Unity Import" slot directly under World Root, from
+    // a *previous* session (this or an earlier Editor session/connection). Returns its ID if
+    // found, or null if not found / not connected / the query itself fails for any reason - the
+    // caller (EnsureImportRootSlot) always has a safe fallback (just allocate a fresh ID), so a
+    // failure here should never block conversion.
+    string TryFindExistingImportRootSlotId()
+    {
+        if (Link == null || !Link.IsConnected)
+            return null;
+
+        try
+        {
+            var response = Task.Run(async () => await Link.GetSlotData(new GetSlot()
+            {
+                SlotID = "Root",
+                Depth = 1,
+                IncludeComponentData = false,
+            })).GetAwaiter().GetResult();
+
+            if (response == null || !response.Success || response.Data?.Children == null)
+                return null;
+
+            foreach (var child in response.Data.Children)
+                if (child.Name?.Value == ImportRootSlotName)
+                    return child.ID;
+        }
+        catch
+        {
+            // Swallow: worst case we fall back to the pre-existing behavior (allocate fresh,
+            // leave the stale tree orphaned) rather than fail the whole conversion over a
+            // best-effort cleanup lookup.
+        }
+
+        return null;
     }
 
     ResoniteLink.Slot GetLinkSlot(Transform transform)

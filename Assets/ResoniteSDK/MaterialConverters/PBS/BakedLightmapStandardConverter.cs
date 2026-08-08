@@ -13,6 +13,11 @@ using UnityEngine;
 // mapping below otherwise follows the same conventions as StandardConverter/StandardBaseConverter
 // (context.GetITexture2D for all textures, Color.ToColorX_sRGB() for colors, "_EMISSION" keyword
 // gating for emissive).
+//
+// 2026-08-08 (Tanossy指摘「ソファーの色味が違う」): AlbedoColor/EmissiveColorが
+// ColorGradingApproximation.Apply(...)を経由していなかった不備を修正。StandardBaseConverter
+// (非ライトマップ材質)側は既に呼んでいたが、このクラス(ライトマップ焼き込み材質=このシーンの
+// 大半)は呼び忘れていたため、Tonemap Compensationがマテリアル色に一切効いていなかった。
 [MaterialConverter(false, "ResoniteSDK/BakedLightmapStandard")]
 public class BakedLightmapStandardConverter : ResoniteMaterialConverter
 {
@@ -22,13 +27,23 @@ public class BakedLightmapStandardConverter : ResoniteMaterialConverter
     // shows PBS_MultiUV_Metallic's SecondaryAlbedo compositing doesn't match that (e.g. it turns
     // out to be additive, or blended differently), flip this to true to instead route the
     // lightmap through the additive SecondaryEmissiveMap slot.
-    public static bool EmissiveLightmapMode = false;
+    //
+    // 2026-08-08 (Tanossy指摘「暗い・ギラつく」への対応、クヴァシル調査で裏付け): Resoniteには
+    // ベイクGI機構自体が存在しない(実証済み)。SecondaryAlbedo乗算合成は「照らされて見える色」を
+    // 作るだけで、実際のシーン照明を追加しない — むしろベイクデータ(実測平均linear 0.06〜0.14、
+    // すなわち1未満)を乗算するので必ず暗くなる方向にしか働かない。かつ環境光/環境スペキュラーが
+    // 皆無なため、今回追加した実ライトのハイライトだけが唐突に浮く。SecondaryEmissiveMap経由の
+    // 加算合成に切り替え、ベイクデータを「明るさを足す疑似アンビエント光」として扱う実機検証。
+    public static bool EmissiveLightmapMode = true;
 
     // Verification mode for large baked scenes. The first in-world check only needs geometry,
     // material colors, and the baked lightmap; uploading every source albedo/normal/metallic/
     // occlusion/emission texture can overwhelm ResoniteLink before anything appears in-world.
-    // Flip to false later when the lightmap path itself has been confirmed.
-    public static bool LightmapPreviewUploadOnly = true;
+    //
+    // 2026-08-08 (Tanossy指摘): "AlbedoTexture等が送られていない"の根本原因がこのフラグだった。
+    // ライトマップ経路自体は今日実機で繰り返し確認済み（SecondaryAlbedoTexture/URLとも正常に
+    // 届くことを確認済み）なので、falseへ切り替える。
+    public static bool LightmapPreviewUploadOnly = false;
 
     public PBS_MultiUV_MetallicWrapper PBS;
 
@@ -56,7 +71,7 @@ public class BakedLightmapStandardConverter : ResoniteMaterialConverter
         data.AlphaClip = material.GetFloat("_Cutoff");
 
         // --- Albedo (UV0) ---
-        data.AlbedoColor = material.GetColor("_Color").ToColorX_sRGB();
+        data.AlbedoColor = ColorGradingApproximation.Apply(material.GetColor("_Color")).ToColorX_sRGB();
         data.AlbedoTexture = LightmapPreviewUploadOnly ? null : context.GetITexture2D(material.GetTexture("_MainTex"));
         var mainTexScale = material.GetTextureScale("_MainTex");
         var mainTexOffset = material.GetTextureOffset("_MainTex");
@@ -84,7 +99,7 @@ public class BakedLightmapStandardConverter : ResoniteMaterialConverter
         // --- Emission (UV0) ---
         if (material.IsKeywordEnabled("_EMISSION"))
         {
-            data.EmissiveColor = material.GetColor("_EmissionColor").ToColorX_sRGB();
+            data.EmissiveColor = ColorGradingApproximation.Apply(material.GetColor("_EmissionColor")).ToColorX_sRGB();
             data.EmissiveMap = LightmapPreviewUploadOnly ? null : context.GetITexture2D(material.GetTexture("_EmissionMap"));
         }
         else

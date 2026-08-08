@@ -56,6 +56,9 @@ public class ResoniteLinkWindow : EditorWindow
     [SerializeField]
     public bool LogMessageJSON;
 
+    [SerializeField]
+    public bool ToneMapCompensation = true;
+
     public string UniqueSessionId => _uniqueSessionId;
 
     public LinkInterface Link => _linkInterface;
@@ -152,22 +155,16 @@ public class ResoniteLinkWindow : EditorWindow
         ConvertSkybox = GUILayout.Toggle(ConvertSkybox, "Convert Skybox");
         ForceRefreshGeneratedLightmaps = GUILayout.Toggle(ForceRefreshGeneratedLightmaps, "Force Refresh Generated Lightmaps");
 
+        // 2026-08-08 (Tanossy指摘「オプションでパネル上でオンオフできるように」): マテリアル色への
+        // トーンマップ近似(ColorGradingApproximation)とReflection Probe強度減衰
+        // (ReflectionProbeConverter)の両方をこの1つのトグルでまとめて制御する。実体は
+        // Assets/ResoniteSDK/ToneMapCompensation/ToneMapCompensationState.cs（本体SDKから独立した
+        // フォルダ）の static bool。
+        ToneMapCompensation = GUILayout.Toggle(ToneMapCompensation, "Send Tonemap Compensation (experimental)");
+        ToneMapCompensationState.Enabled = ToneMapCompensation;
+
         if (GUILayout.Button("Send Current Scene"))
             SendCurrentScene();
-
-        EditorGUILayout.BeginHorizontal();
-        if (GUILayout.Button("Send Meshes Only"))
-            SendMeshesOnly();
-
-        if (GUILayout.Button("Send Materials Only"))
-            SendMaterialsOnly();
-        EditorGUILayout.EndHorizontal();
-
-        if (GUILayout.Button("Send Lightmaps Only"))
-            SendLightmapsOnly();
-
-        if (GUILayout.Button("Retry Missing Asset URLs"))
-            RetryMissingAssetURLs();
 
         GUI.enabled = State == ConnectionState.Connected;
 
@@ -184,19 +181,12 @@ public class ResoniteLinkWindow : EditorWindow
 
         GUI.enabled = true;
 
-        GUILayout.Space(32);
-        GUILayout.Label("DEBUGGING:");
-
-        LogMessageJSON = GUILayout.Toggle(LogMessageJSON, "Log Messages JSON");
-
-        if (GUILayout.Button("Cleanup converters in the scene"))
-            CleanupConverters();
-
-        if (GUILayout.Button("Cleanup Resonite Components in the scene"))
-            CleanupReosniteComponents();
-
-        if (GUILayout.Button("Reset conversion state"))
-            ResetConversionState();
+        // 2026-08-08 (Tanossy指摘「独自パネルにすべて機能はおいて」): Meshes/Materials/Lightmaps
+        // Only送信・Retry Missing Asset URLs・DEBUGGINGセクション一式(Cleanup系・Reset conversion
+        // state・Log Messages JSON)は、この公式然としたパネルから ResoniteSDKDebugWindow.cs
+        // (メニュー: Resonite SDK/Open Debug Tools) へ移設した。呼び出し先メソッドはそちらから
+        // 直接参照できるようpublicへ変更済み。ここには常時使う導線(接続・Send Current Scene・
+        // Realtime Mode)だけを残す。
     }
 
     // Force an update, which should refresh the UI
@@ -265,7 +255,7 @@ public class ResoniteLinkWindow : EditorWindow
         _converter.ConvertLightmapsOnly();
     }
 
-    void RetryMissingAssetURLs()
+    public void RetryMissingAssetURLs()
     {
         EnsureConverter();
 
@@ -342,7 +332,7 @@ public class ResoniteLinkWindow : EditorWindow
         }
     }
 
-    void CleanupConverters()
+    public void CleanupConverters()
     {
         var roots = SceneManager.GetActiveScene().GetRootGameObjects();
 
@@ -351,7 +341,7 @@ public class ResoniteLinkWindow : EditorWindow
                 DestroyImmediate(converter);
     }
 
-    void CleanupReosniteComponents()
+    public void CleanupReosniteComponents()
     {
         var roots = SceneManager.GetActiveScene().GetRootGameObjects();
 
@@ -360,7 +350,7 @@ public class ResoniteLinkWindow : EditorWindow
                 DestroyImmediate(component);
     }
 
-    void ResetConversionState()
+    public void ResetConversionState()
     {
         // 2026-07-14 バグ修正（Tanossy指摘）: これまでは _converter を作り直すだけで、
         // Unityシーン内に既に存在する __UnityAssets / __UnitySkybox ルート配下の変換器
