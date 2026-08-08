@@ -385,8 +385,29 @@ public static class LightmapMaterialCache
         // from the same source lightmapData.lightmapColor as bakedLightmapTex above, independent
         // of the directional-lightmap override branch above (the desaturated fill approximates
         // ambient brightness only, so it doesn't need the per-renderer normal-baked variant).
-        var bakedLightmapGrayTex = LightmapDecoder.GetDecodedLightmap(sceneGuid, lightmapIndex, lightmapData.lightmapColor, desaturate: true);
-        changed |= SetTextureIfChanged(variant, "_BakedLightmapGray", bakedLightmapGrayTex);
+        //
+        // 2026-08-08 structural cleanup: only decode/store this when the additive fill it feeds
+        // is actually enabled (BakedLightmapStandardConverter.AdditiveFillStrength > 0). At the
+        // current default (0 - pure multiply, additive fill disabled), SecondaryEmissiveColor is
+        // pure black regardless of what texture is bound here, so decoding (RenderTexture blit +
+        // resize + PNG encode + AssetDatabase import, every single conversion) and later
+        // uploading this texture to Resonite over ResoniteLink was pure waste - visually a no-op,
+        // but real CPU/disk/network cost, and extra payload over a WebSocket transport already
+        // known to be flaky under load. The mechanism itself is untouched - setting
+        // AdditiveFillStrength back above 0 makes this decode/store path active again exactly as
+        // before.
+        if (BakedLightmapStandardConverter.AdditiveFillStrength > 0f)
+        {
+            var bakedLightmapGrayTex = LightmapDecoder.GetDecodedLightmap(sceneGuid, lightmapIndex, lightmapData.lightmapColor, desaturate: true);
+            changed |= SetTextureIfChanged(variant, "_BakedLightmapGray", bakedLightmapGrayTex);
+        }
+        else if (variant.GetTexture("_BakedLightmapGray") != null)
+        {
+            // Fill was previously enabled (variant already has a gray texture bound) and has
+            // since been turned back off - clear the stale reference so a future re-enable can't
+            // silently pick up out-of-date pixel data before this converter runs again.
+            changed |= SetTextureIfChanged(variant, "_BakedLightmapGray", null);
+        }
 
         if (changed)
             EditorUtility.SetDirty(variant);

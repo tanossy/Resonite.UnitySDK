@@ -141,7 +141,15 @@ public class BakedLightmapStandardConverter : ResoniteMaterialConverter
         // Desaturated (luma-only) companion, see LightmapMaterialCache/LightmapDecoder's
         // desaturate doc comments - used for the additive fill below so per-object baked-lightmap
         // hue (window=cool, lamp=warm) doesn't leak into the brightness-only approximation.
-        var bakedLightmapGray = context.GetITexture2D(material.GetTexture("_BakedLightmapGray"));
+        //
+        // 2026-08-08 structural cleanup: only fetch/upload when the additive fill is actually
+        // enabled - see AdditiveFillStrength's doc comment and the matching guard in
+        // LightmapMaterialCache.GetVariantOrOriginalInner. At AdditiveFillStrength=0 this texture
+        // contributes nothing (SecondaryEmissiveColor below is pure black), so uploading it would
+        // be pure network waste.
+        var bakedLightmapGray = AdditiveFillStrength > 0f
+            ? context.GetITexture2D(material.GetTexture("_BakedLightmapGray"))
+            : null;
         var lightmapScaleOffset = material.GetVector("_BakedLightmapST");
         var lightmapScale = new Vector2(lightmapScaleOffset.x, lightmapScaleOffset.y);
         var lightmapOffset = new Vector2(lightmapScaleOffset.z, lightmapScaleOffset.w);
