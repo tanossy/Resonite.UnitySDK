@@ -33,7 +33,30 @@ public static class LightTuning
     // factor-out. Per-light-type differentiation (a separate multiplier just for Point lights)
     // was offered as an option, but simplicity was prioritized and this single shared value for
     // all lights was set back to 1.8.
-    public static float IntensityMultiplier = 1.8f;
+    //
+    // 2026-08-09 replaced entirely (per Tanossy's feedback, after a real incident): a fixed
+    // multiplier tuned for one scene (bedroom, native Light.intensity around 0.5) turned out to
+    // wildly overexpose a different scene sent later (a restaurant/diner scene whose Directional
+    // Light was natively 5.0) - 5.0 * 1.8 = 9.0, badly blown out. Fixed multipliers don't
+    // generalize across scenes with very different native brightness scales.
+    //
+    // Replaced with a self-normalizing ceiling: every send, the scene's single brightest Light
+    // is found, and the effective multiplier is computed so THAT light lands exactly at
+    // IntensityCeiling; every other light in the scene is scaled by that same ratio (so relative
+    // brightness between lights within one scene is preserved, only the overall scale changes).
+    // This directly fixes the "sun goes from 5.0 to 9.0" failure mode, since the multiplier now
+    // adapts per-scene instead of being reused blindly.
+    //
+    // Known remaining gap: this only bounds the single brightest light, not the *cumulative*
+    // brightness of many lights added together (e.g. a scene with dozens of moderate-intensity
+    // fill lights, all individually under the ceiling, can still sum to an overexposed result -
+    // this was also a contributing factor in the incident above, via a scene's dense
+    // "AmbientLights" fill-light group, and is not solved here).
+    //
+    // Starting value carried over from the previous fixed-multiplier tuning (bedroom scene's
+    // Point Lights: native ~0.5 * old multiplier 1.8 = 0.9). Not yet re-verified live against
+    // either scene under this new formula - Unity MCP was disconnected when this was written.
+    public static float IntensityCeiling = 0.9f;
 
     // 2026-08-08 (per Tanossy's feedback: "too much yellow, want to boost the whiteness"): the
     // room's light color is being transferred straight through from Unity as a warm tone (roughly
@@ -48,7 +71,36 @@ public static class LightTuning
     // no real harm; properly addressing it is deferred to a future pass).
     public static float WhiteBalanceShift = 0.7f;
 
-    public static float ApplyIntensity(float unityIntensity) => unityIntensity * IntensityMultiplier;
+    public static float ApplyIntensity(float unityIntensity) => unityIntensity * GetEffectiveIntensityMultiplier();
 
     public static Color ApplyColor(Color unityColor) => Color.Lerp(unityColor, Color.white, Mathf.Clamp01(WhiteBalanceShift));
+
+    // Recomputed from the live scene on every call rather than cached: this only ever runs
+    // during an Editor-time scene conversion (never per-frame/runtime), so even a few hundred
+    // lights costs nothing worth caching for, and a fresh scan avoids any risk of a stale cached
+    // max surviving a scene edit between sends.
+    static float GetEffectiveIntensityMultiplier()
+    {
+        float sceneMax = GetSceneMaxLightIntensity();
+
+        // No positive-intensity lights found (empty scene, or every light at 0) - nothing to
+        // scale against. Pass through unchanged rather than dividing by zero.
+        if (sceneMax <= 0f)
+            return 1f;
+
+        return IntensityCeiling / sceneMax;
+    }
+
+    static float GetSceneMaxLightIntensity()
+    {
+        float max = 0f;
+
+        foreach (var light in UnityEngine.Object.FindObjectsOfType<Light>())
+        {
+            if (light != null && light.intensity > max)
+                max = light.intensity;
+        }
+
+        return max;
+    }
 }
