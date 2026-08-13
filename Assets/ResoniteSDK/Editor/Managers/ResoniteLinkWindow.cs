@@ -59,6 +59,14 @@ public class ResoniteLinkWindow : EditorWindow
     [SerializeField]
     public bool ToneMapCompensation = true;
 
+    // Mirrors LightTuning.IntensityCeiling - see the OnGUI() slider's own comment for why this
+    // needs a UI control at all. Kept as the window's own serialized field (same pattern as
+    // ToneMapCompensation above) rather than reading/writing LightTuning.IntensityCeiling
+    // directly from a plain static, so the chosen value survives domain reloads instead of
+    // resetting to LightTuning's hardcoded default every time scripts recompile.
+    [SerializeField]
+    public float LightIntensityCeiling = 0.9f;
+
     public string UniqueSessionId => _uniqueSessionId;
 
     public LinkInterface Link => _linkInterface;
@@ -163,6 +171,17 @@ public class ResoniteLinkWindow : EditorWindow
         // independent from the core SDK).
         ToneMapCompensation = GUILayout.Toggle(ToneMapCompensation, "Send Tonemap Compensation (experimental)");
         ToneMapCompensationState.Enabled = ToneMapCompensation;
+
+        // 2026-08-09 (per Tanossy's feedback, after a real incident): a fixed light-intensity
+        // multiplier tuned for one scene badly overexposed a different scene sent later, whose
+        // native light intensities were on a different scale. LightTuning now self-normalizes
+        // per scene (the brightest light in the scene is scaled to land exactly at this
+        // ceiling, every other light scaled by the same ratio), but the right ceiling value can
+        // still vary by taste/scene, so it's exposed here instead of requiring a code edit.
+        LightIntensityCeiling = EditorGUILayout.Slider(
+            new GUIContent("Light Intensity Ceiling", "Target intensity for the scene's single brightest light at send time; every light is scaled by the same ratio needed to put the brightest one exactly here."),
+            LightIntensityCeiling, 0.1f, 3f);
+        LightTuning.IntensityCeiling = LightIntensityCeiling;
 
         if (GUILayout.Button("Send Current Scene"))
             SendCurrentScene();
