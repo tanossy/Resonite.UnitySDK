@@ -25,6 +25,10 @@
 //                          数値フィールドを表示 — 元からある挙動、そのまま）
 //   Lighting セクション -> Baker==UnityStandard のときだけ表示。つまみ5個＋実験的チェック
 //                          ボックス1個（下記表）
+//   送信時ライト調整   -> どちらのBakerでも常時表示（ResoniteSDK/LightTuning.csの
+//                          IntensityCeiling/WhiteBalanceShiftを直接編集。ベイク結果自体では
+//                          なく変換/送信時にのみ効く値のためBaker非依存）。
+//                          DrawSendTimeLightTuningSection()参照。
 //   [Convert Lights]   -> Baker==Bakery のときだけ表示（Unity Standard時は非表示）
 //   [Bake] [Bake & Send] の1列のみ
 //   Status / Result Log
@@ -265,6 +269,27 @@ public class LightmapPipelineWindow : EditorWindow
     // the OFF->ON transition, so no separate "previous value" field is needed.
     bool _bakeNormalDetail;
 
+    // --- Send-Time Light Tuning section state -------------------------------------------
+    //
+    // Unlike the Lighting section above (Unity Standard baker only, affects the *baked*
+    // result), these mirror ResoniteSDK/LightTuning.cs's static tuning fields, which are
+    // applied at conversion/send time in LightConverter.cs regardless of which baker
+    // produced the lightmap — drawn unconditionally (not gated on _baker) for that reason.
+    // Kept as this window's own fields (synced into LightTuning's statics every OnGUI, same
+    // pattern DrawLightingSection() already uses for its own knobs) so the values are
+    // editable from this panel instead of requiring a code edit.
+    float _lightIntensityCeiling = 0.9f;
+    float _lightWhiteBalanceShift = 0.7f;
+
+    const string SendTimeTuningHeaderJA = "送信時ライト調整";
+    const string SendTimeTuningHeaderEN = "Send-Time Light Tuning";
+
+    const string TooltipIntensityCeilingJA = "シーン内で最も明るいライトが送信時にこの値になるよう、全ライトへ同じ比率で倍率を逆算する（固定倍率ではなくシーンごとに自動正規化）";
+    const string TooltipIntensityCeilingEN = "Target intensity for the scene's single brightest light at send time; every light is scaled by the same ratio needed to put the brightest one exactly here (self-normalizing per scene, not a fixed multiplier).";
+
+    const string TooltipWhiteBalanceShiftJA = "光源色を送信時だけ白側へブレンドする（0=元の色のまま、1=純白）";
+    const string TooltipWhiteBalanceShiftEN = "Blends each light's color toward white at send time (0 = unchanged, 1 = pure white).";
+
     // Cached via reflection the first time it's needed; see GetRenderSettingsObjectForUndo().
     static MethodInfo _getRenderSettingsMethod;
 
@@ -404,6 +429,9 @@ public class LightmapPipelineWindow : EditorWindow
             EditorGUILayout.Space();
             sun = DrawLightingSection(baking);
         }
+
+        EditorGUILayout.Space();
+        DrawSendTimeLightTuningSection(baking);
 
         EditorGUILayout.Space();
 
@@ -588,6 +616,33 @@ public class LightmapPipelineWindow : EditorWindow
         DrawNormalBakeToggle();
 
         return sun;
+    }
+
+    // ------------------------------------------------------------------
+    // Send-Time Light Tuning section — see the field-block comment above (near
+    // _lightIntensityCeiling/_lightWhiteBalanceShift) for why this is drawn unconditionally
+    // (both bakers) rather than only for LightBaker.UnityStandard like DrawLightingSection().
+    // No "Apply" button here either — the values are synced straight into
+    // LightTuning's static fields on every OnGUI call, so they take effect on whatever the
+    // next Send Current Scene/Bake & Send actually does, without needing a scene edit first.
+    // ------------------------------------------------------------------
+
+    void DrawSendTimeLightTuningSection(bool baking)
+    {
+        EditorGUILayout.LabelField(L(SendTimeTuningHeaderJA, SendTimeTuningHeaderEN), EditorStyles.boldLabel);
+
+        GUI.enabled = !baking;
+
+        _lightIntensityCeiling = EditorGUILayout.Slider(
+            new GUIContent(L("明るさの上限", "Intensity Ceiling"), L(TooltipIntensityCeilingJA, TooltipIntensityCeilingEN)),
+            _lightIntensityCeiling, 0.1f, 3f);
+
+        _lightWhiteBalanceShift = EditorGUILayout.Slider(
+            new GUIContent(L("白色寄せ", "White Balance Shift"), L(TooltipWhiteBalanceShiftJA, TooltipWhiteBalanceShiftEN)),
+            _lightWhiteBalanceShift, 0f, 1f);
+
+        LightTuning.IntensityCeiling = _lightIntensityCeiling;
+        LightTuning.WhiteBalanceShift = _lightWhiteBalanceShift;
     }
 
     // "Bake normal detail into lightmap (experimental)" — see the file header comment's
