@@ -19,7 +19,7 @@ public class SceneConverter : IConversionContext
 
     public bool LogMessageJSON => _window.LogMessageJSON;
     public bool ConvertSkybox => _window.ConvertSkybox;
-    public bool ForceRefreshGeneratedLightmaps => _window.ForceRefreshGeneratedLightmaps;
+    public bool ForceRefreshGeneratedLightmaps => ConversionPassState.ForceRefreshGeneratedLightmaps;
     public ResoniteSdkConversionPass ActiveConversionPass => ConversionPassState.ActivePass;
 
     // TODO!!! Move this to a dedicated connection manager so the Window is only managing the UI?

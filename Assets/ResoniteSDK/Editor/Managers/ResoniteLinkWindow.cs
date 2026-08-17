@@ -51,13 +51,7 @@ public class ResoniteLinkWindow : EditorWindow
     public bool ConvertSkybox = true;
 
     [SerializeField]
-    public bool ForceRefreshGeneratedLightmaps = true;
-
-    [SerializeField]
     public bool LogMessageJSON;
-
-    [SerializeField]
-    public bool ToneMapCompensation = true;
 
     public string UniqueSessionId => _uniqueSessionId;
 
@@ -153,16 +147,14 @@ public class ResoniteLinkWindow : EditorWindow
         GUI.enabled = State == ConnectionState.Connected && !_converter.IsRealtimeModeActive;
 
         ConvertSkybox = GUILayout.Toggle(ConvertSkybox, "Convert Skybox");
-        ForceRefreshGeneratedLightmaps = GUILayout.Toggle(ForceRefreshGeneratedLightmaps, "Force Refresh Generated Lightmaps");
 
-        // 2026-08-08 (per Tanossy's feedback: "make it toggleable on/off from an option in the
-        // panel"): This single toggle controls both the tonemap approximation applied to material
-        // colors (ColorGradingApproximation) and the Reflection Probe intensity falloff
-        // (ReflectionProbeConverter) together. The backing state is a static bool in
-        // Assets/ResoniteSDK/ToneMapCompensation/ToneMapCompensationState.cs (a folder kept
-        // independent from the core SDK).
-        ToneMapCompensation = GUILayout.Toggle(ToneMapCompensation, "Send Tonemap Compensation (experimental)");
-        ToneMapCompensationState.Enabled = ToneMapCompensation;
+        // 2026-08-18: "Force Refresh Generated Lightmaps" and "Send Tonemap Compensation
+        // (experimental)" (both overlay additions, not part of vanilla Resonite.UnitySDK — unlike
+        // Convert Skybox above, which is upstream) moved to the Lightmap Pipeline panel's
+        // "Send-Time Options" section (see LightmapPipelineWindow.cs's DrawSendTimeOptionsSection())
+        // per Tanossy's feedback to keep this official-looking panel limited to what's actually
+        // original. Their backing state (ConversionPassState.ForceRefreshGeneratedLightmaps /
+        // ToneMapCompensationState.Enabled) is unchanged, just no longer written from here.
 
         if (GUILayout.Button("Send Current Scene"))
             SendCurrentScene();

@@ -25,6 +25,9 @@
 //                          数値フィールドを表示 — 元からある挙動、そのまま）
 //   Lighting セクション -> Baker==UnityStandard のときだけ表示。つまみ5個＋実験的チェック
 //                          ボックス1個（下記表）
+//   送信時オプション   -> どちらのBakerでも常時表示。Force Refresh Generated Lightmaps /
+//                          Send Tonemap Compensation（旧・Resonite SDKパネルにあった非vanilla
+//                          トグル2個、2026-08-18移設）。DrawSendTimeOptionsSection()参照。
 //   送信時ライト調整   -> どちらのBakerでも常時表示（ResoniteSDK/LightTuning.csの
 //                          IntensityCeiling/WhiteBalanceShiftを直接編集。ベイク結果自体では
 //                          なく変換/送信時にのみ効く値のためBaker非依存）。
@@ -290,6 +293,30 @@ public class LightmapPipelineWindow : EditorWindow
     const string TooltipWhiteBalanceShiftJA = "光源色を送信時だけ白側へブレンドする（0=元の色のまま、1=純白）";
     const string TooltipWhiteBalanceShiftEN = "Blends each light's color toward white at send time (0 = unchanged, 1 = pure white).";
 
+    // --- Send-Time Options section state --------------------------------------------------
+    //
+    // 2026-08-18: moved here from the main Resonite SDK Manager panel (ResoniteLinkWindow.cs)
+    // per Tanossy's feedback — "Convert Skybox and the rest weren't originally there either,
+    // right? Don't dirty ResoniteSDK." Checked against upstream Yellow-Dog-Man/Resonite.UnitySDK
+    // directly: Convert Skybox IS vanilla (left in place on the main panel), but these two are
+    // genuine overlay additions (both from the 2026-08-08 tonemap-compensation commit), so they
+    // move here. Same drawn-unconditionally rationale as Send-Time Light Tuning above (both take
+    // effect at conversion/send time, regardless of which baker produced the lightmap). Backing
+    // state lives in ConversionPassState.ForceRefreshGeneratedLightmaps / ToneMapCompensationState
+    // .Enabled — this window just mirrors the checkbox into those statics every OnGUI, same as
+    // DrawSendTimeLightTuningSection() does for LightTuning's statics.
+    bool _forceRefreshGeneratedLightmaps = true;
+    bool _sendToneMapCompensation = true;
+
+    const string SendTimeOptionsHeaderJA = "送信時オプション";
+    const string SendTimeOptionsHeaderEN = "Send-Time Options";
+
+    const string TooltipForceRefreshJA = "生成済みライトマップ差分ファイルを毎回強制再生成する";
+    const string TooltipForceRefreshEN = "Force-regenerate the generated lightmap variant files on every send.";
+
+    const string TooltipToneMapCompensationJA = "マテリアル色とReflection Probe強度へトーンマップ近似補正を掛ける（実験的）";
+    const string TooltipToneMapCompensationEN = "Apply a tonemap approximation to material colors and Reflection Probe intensity (experimental).";
+
     // Cached via reflection the first time it's needed; see GetRenderSettingsObjectForUndo().
     static MethodInfo _getRenderSettingsMethod;
 
@@ -429,6 +456,9 @@ public class LightmapPipelineWindow : EditorWindow
             EditorGUILayout.Space();
             sun = DrawLightingSection(baking);
         }
+
+        EditorGUILayout.Space();
+        DrawSendTimeOptionsSection(baking);
 
         EditorGUILayout.Space();
         DrawSendTimeLightTuningSection(baking);
@@ -616,6 +646,31 @@ public class LightmapPipelineWindow : EditorWindow
         DrawNormalBakeToggle();
 
         return sun;
+    }
+
+    // ------------------------------------------------------------------
+    // Send-Time Options section — see the field-block comment above (near
+    // _forceRefreshGeneratedLightmaps/_sendToneMapCompensation) for why these moved here from
+    // the main SDK panel. Drawn unconditionally (both bakers), same rationale as Send-Time Light
+    // Tuning below.
+    // ------------------------------------------------------------------
+
+    void DrawSendTimeOptionsSection(bool baking)
+    {
+        EditorGUILayout.LabelField(L(SendTimeOptionsHeaderJA, SendTimeOptionsHeaderEN), EditorStyles.boldLabel);
+
+        GUI.enabled = !baking;
+
+        _forceRefreshGeneratedLightmaps = EditorGUILayout.Toggle(
+            new GUIContent(L("生成済みライトマップを強制再生成", "Force Refresh Generated Lightmaps"), L(TooltipForceRefreshJA, TooltipForceRefreshEN)),
+            _forceRefreshGeneratedLightmaps);
+
+        _sendToneMapCompensation = EditorGUILayout.Toggle(
+            new GUIContent(L("トーンマップ補正を送信（実験的）", "Send Tonemap Compensation (experimental)"), L(TooltipToneMapCompensationJA, TooltipToneMapCompensationEN)),
+            _sendToneMapCompensation);
+
+        ConversionPassState.ForceRefreshGeneratedLightmaps = _forceRefreshGeneratedLightmaps;
+        ToneMapCompensationState.Enabled = _sendToneMapCompensation;
     }
 
     // ------------------------------------------------------------------
