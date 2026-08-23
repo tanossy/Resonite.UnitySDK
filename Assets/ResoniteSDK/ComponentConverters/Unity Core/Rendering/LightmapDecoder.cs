@@ -72,7 +72,16 @@ public static class LightmapDecoder
     // additive fill (BakedLightmapStandardConverter.AdditiveFillStrength) was rejected because it
     // flattens color contrast (raising this multiply-based value instead is the correct fix - since
     // multiplication preserves ratios, white stays white and brown stays brown while both get
-    // brighter). 3.0 was the first real-machine-verified value.
+    // brighter). 1.1 was the value that scene's live tuning pass converged on (an earlier trial
+    // during that same pass used 3.0, which this comment used to (incorrectly) call "the verified
+    // value" - it wasn't; 1.1 is).
+    //
+    // 2026-08-18: this is a single global constant, but the "right" boost depends on how dark a
+    // given room's own bake data is - a value tuned for one scene isn't guaranteed to fit another
+    // (same class of bug LightTuning.IntensityCeiling was introduced to fix on the real-time-light
+    // side, just never applied here). Exposed as a slider in the Lightmap Pipeline panel's
+    // "Send-Time Light Tuning" section (see LightmapPipelineWindow.cs) so it can be re-tuned per
+    // room without a code edit; changing it here still works too (both write the same field).
     public static float RangeScale = 1.1f;
 
     // 2026-08-08 (per Tanossy's feedback: "the yellow light is too strong"): LightConverter.
@@ -81,7 +90,8 @@ public static class LightmapDecoder
     // Because SecondaryAlbedo is a multiply, this tinted bake data kept pulling the whole room's
     // color tone toward warm. 1.0 = color unchanged, 0.0 = fully desaturated (equivalent to
     // desaturate=true). 0.5 was the first real-machine-verified value (keeps some color character
-    // while suppressing the warm cast).
+    // while suppressing the warm cast). Same per-scene caveat and panel exposure as RangeScale
+    // above.
     public static float ColorSaturationCompensation = 0.6f;
 
     // ResoniteLink can drop the WebSocket while importing very large decoded lightmap PNGs. Keep
