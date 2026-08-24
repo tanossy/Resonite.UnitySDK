@@ -282,7 +282,7 @@ public class LightmapPipelineWindow : EditorWindow
     // pattern DrawLightingSection() already uses for its own knobs) so the values are
     // editable from this panel instead of requiring a code edit.
     float _lightIntensityCeiling = 0.9f;
-    float _lightWhiteBalanceShift = 0.7f;
+    float _lightWhiteBalanceShift = 0.55f;
 
     const string SendTimeTuningHeaderJA = "送信時ライト調整";
     const string SendTimeTuningHeaderEN = "Send-Time Light Tuning";

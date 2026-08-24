@@ -64,12 +64,23 @@ public static class LightTuning
     // The light color itself is blended toward white at send time only (0 = Unity's color
     // unchanged, 1 = pure white). Finalized at 0.4 -> 0.7.
     //
+    // 2026-08-24 (per Tanossy's feedback: opposite direction - "barely any yellow left, looks
+    // almost white"): confirmed live (Point Light color read back as ColorX(1, 0.979, 0.933) at
+    // 0.7), and 0.7 also left almost no headroom for the separate in-world Light Tuning Panel's
+    // own White Balance slider (which only Lerps further from whatever baseline was actually
+    // sent - it can't recover color this static field already blended away before send).
+    // 0.7 itself turned out to be too strong; 0.4 (the value it replaced) was rejected earlier
+    // for the opposite reason ("too much yellow"). Split the difference to 0.55 as a starting
+    // point bracketed by both known-bad real-machine data points - still unverified at this
+    // exact value, re-check live after the next send (the Lightmap Pipeline panel's own
+    // "Send-Time Light Tuning" slider can be nudged further without a code edit).
+    //
     // Known limitation (2026-08-08, explained to the user and agreed to leave as-is for now):
     // since this Lerps uniformly toward white regardless of the original hue, if a scene has
     // multiple light sources of different colors, their original color differences get equally
     // diluted (this world only has a single warm-toned lighting scheme, so it was judged to cause
     // no real harm; properly addressing it is deferred to a future pass).
-    public static float WhiteBalanceShift = 0.7f;
+    public static float WhiteBalanceShift = 0.55f;
 
     public static float ApplyIntensity(float unityIntensity) => unityIntensity * GetEffectiveIntensityMultiplier();
 
