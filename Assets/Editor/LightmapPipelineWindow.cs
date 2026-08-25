@@ -379,6 +379,17 @@ public class LightmapPipelineWindow : EditorWindow
     const string TooltipSendLightmapsOnlyJA = "ライトマップのみ送信テスト（メッシュ/マテリアルは変更しない）";
     const string TooltipSendLightmapsOnlyEN = "Send only lightmap updates for testing; meshes and materials are left untouched.";
 
+    // 2026-08-27 (per Tanossy's feedback: "there's a button that isn't localized"): these two
+    // predate this section's L(ja, en) convention (they moved here verbatim from the deleted
+    // ResoniteSDKDebugWindow.cs, which never localized anything) and were missed when this
+    // section was written. Send Lightmaps Only above was new at that point so it got the
+    // convention from the start; these two didn't.
+    const string TooltipSendMeshesOnlyJA = "メッシュのみ送信テスト（マテリアルは変更しない）";
+    const string TooltipSendMeshesOnlyEN = "Send only mesh asset/provider updates; material slots are left untouched.";
+
+    const string TooltipSendMaterialsOnlyJA = "マテリアルのみ送信テスト（メッシュは変更しない）";
+    const string TooltipSendMaterialsOnlyEN = "Send only material and texture updates; mesh providers are left untouched.";
+
     const string TooltipRetryMissingAssetURLsJA = "URLが確定していない（送信済みだが未解決の）アセットへの送信を再試行する";
     const string TooltipRetryMissingAssetURLsEN = "Retry sending assets that were sent but never received a resolved URL.";
 
@@ -826,13 +837,13 @@ public class LightmapPipelineWindow : EditorWindow
 
         EditorGUILayout.BeginHorizontal();
 
-        if (GUILayout.Button(new GUIContent("Send Meshes Only", "Send only mesh asset/provider updates; material slots are left untouched.")))
+        if (GUILayout.Button(new GUIContent(L("メッシュのみ送信", "Send Meshes Only"), L(TooltipSendMeshesOnlyJA, TooltipSendMeshesOnlyEN))))
             LightmapTestHarness.ConvertMeshesOnly();
 
-        if (GUILayout.Button(new GUIContent("Send Materials Only", "Send only material and texture updates; mesh providers are left untouched.")))
+        if (GUILayout.Button(new GUIContent(L("マテリアルのみ送信", "Send Materials Only"), L(TooltipSendMaterialsOnlyJA, TooltipSendMaterialsOnlyEN))))
             LightmapTestHarness.ConvertMaterialsOnly();
 
-        if (GUILayout.Button(new GUIContent("Send Lightmaps Only", L(TooltipSendLightmapsOnlyJA, TooltipSendLightmapsOnlyEN))))
+        if (GUILayout.Button(new GUIContent(L("ライトマップのみ送信", "Send Lightmaps Only"), L(TooltipSendLightmapsOnlyJA, TooltipSendLightmapsOnlyEN))))
             LightmapTestHarness.ConvertLightmapsOnly();
 
         EditorGUILayout.EndHorizontal();
