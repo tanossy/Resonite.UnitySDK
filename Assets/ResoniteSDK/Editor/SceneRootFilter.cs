@@ -72,6 +72,17 @@ public static class SceneRootFilter
         if (HasMissingScriptInHierarchy(root))
             return true;
 
+        // 2026-08-27 (per Tanossy's feedback: "what's !ftraceLightmaps for, is it needed"):
+        // Bakery's own internal lightmap-cache bookkeeping object (an `ftLightmapsStorage`
+        // component - see Assets/Editor/x64/Bakery/scripts/ftBuildGraphics.cs, which creates it
+        // with `gg.hideFlags = HideFlags.HideInHierarchy` - Bakery itself considers this internal
+        // and hides it from the Unity Hierarchy window, though GetRootGameObjects() still
+        // enumerates it). No Resonite-side meaning at all. Checked via the HideInHierarchy flag
+        // rather than by name/type, so this generalizes to any other tool's similarly
+        // self-hidden bookkeeping objects, not just Bakery's.
+        if ((root.hideFlags & HideFlags.HideInHierarchy) != 0)
+            return true;
+
         return false;
     }
 
