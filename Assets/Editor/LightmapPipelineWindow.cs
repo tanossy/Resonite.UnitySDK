@@ -748,6 +748,16 @@ public class LightmapPipelineWindow : EditorWindow
 
         GUI.enabled = !baking;
 
+        // 2026-08-27 (per Tanossy's feedback: "the checkbox is overlapping the label text, move
+        // it further right"): EditorGUILayout.Toggle draws its checkbox glyph starting at
+        // EditorGUIUtility.labelWidth from the left edge, not after however long the label text
+        // actually is - Unity's default labelWidth (~150px) isn't wide enough for the longer
+        // Japanese labels below, so the checkbox ends up drawn on top of the tail of the text.
+        // Widened just for this section's two toggles and restored immediately after, so it
+        // doesn't affect any other section's layout.
+        float previousLabelWidth = EditorGUIUtility.labelWidth;
+        EditorGUIUtility.labelWidth = 240f;
+
         _forceRefreshGeneratedLightmaps = EditorGUILayout.Toggle(
             new GUIContent(L("生成済みライトマップを強制再生成", "Force Refresh Generated Lightmaps"), L(TooltipForceRefreshJA, TooltipForceRefreshEN)),
             _forceRefreshGeneratedLightmaps);
@@ -755,6 +765,8 @@ public class LightmapPipelineWindow : EditorWindow
         _sendToneMapCompensation = EditorGUILayout.Toggle(
             new GUIContent(L("トーンマップ補正を送信（実験的）", "Send Tonemap Compensation (experimental)"), L(TooltipToneMapCompensationJA, TooltipToneMapCompensationEN)),
             _sendToneMapCompensation);
+
+        EditorGUIUtility.labelWidth = previousLabelWidth;
 
         ConversionPassState.ForceRefreshGeneratedLightmaps = _forceRefreshGeneratedLightmaps;
         ToneMapCompensationState.Enabled = _sendToneMapCompensation;
@@ -769,6 +781,12 @@ public class LightmapPipelineWindow : EditorWindow
     // next Send Current Scene/Bake & Send actually does, without needing a scene edit first.
     // ------------------------------------------------------------------
 
+    // Defaults the "Reset to Defaults" button below restores - kept as named constants (rather
+    // than repeating the field initializers' literals inline at the button call site) so the
+    // two stay in sync if either default is ever re-tuned again.
+    const float DefaultLightIntensityCeiling = 0.9f;
+    const float DefaultLightWhiteBalanceShift = 0.55f;
+
     void DrawSendTimeLightTuningSection(bool baking)
     {
         EditorGUILayout.LabelField(L(SendTimeTuningHeaderJA, SendTimeTuningHeaderEN), EditorStyles.boldLabel);
@@ -782,6 +800,19 @@ public class LightmapPipelineWindow : EditorWindow
         _lightWhiteBalanceShift = EditorGUILayout.Slider(
             new GUIContent(L("白色寄せ", "White Balance Shift"), L(TooltipWhiteBalanceShiftJA, TooltipWhiteBalanceShiftEN)),
             _lightWhiteBalanceShift, 0f, 1f);
+
+        // 2026-08-27 (per Tanossy's feedback: "a reset button for the sliders is needed"):
+        // restores both sliders to the tuned defaults above, not to some neutral/no-op value -
+        // these two were arrived at through several rounds of live-tuning earlier (see
+        // LightTuning.cs's own field comments), so "reset" here means "back to the last known
+        // good values", the same way undoing an accidental drag would.
+        if (GUILayout.Button(new GUIContent(L("既定値に戻す", "Reset to Defaults"), L(
+            "明るさの上限・白色寄せを、実機で調整済みの既定値に戻す",
+            "Restores Intensity Ceiling and White Balance Shift to their real-machine-tuned default values."))))
+        {
+            _lightIntensityCeiling = DefaultLightIntensityCeiling;
+            _lightWhiteBalanceShift = DefaultLightWhiteBalanceShift;
+        }
 
         LightTuning.IntensityCeiling = _lightIntensityCeiling;
         LightTuning.WhiteBalanceShift = _lightWhiteBalanceShift;
