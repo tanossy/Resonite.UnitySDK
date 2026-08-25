@@ -177,10 +177,22 @@ public class ResoniteLinkWindow : EditorWindow
         // 2026-08-08 (per Tanossy's feedback: "keep all the custom functionality in its own
         // panel"): The "Meshes/Materials/Lightmaps Only" sends, "Retry Missing Asset URLs", and the
         // whole DEBUGGING section (Cleanup tools, Reset conversion state, Log Messages JSON) have
-        // been moved out of this official-looking panel and into ResoniteSDKDebugWindow.cs
-        // (menu: Resonite SDK/Open Debug Tools). The methods they call have been changed to public
-        // so they can be referenced directly from there. Only the always-used controls
+        // been moved out of this official-looking panel. The methods they call have been changed to
+        // public so they can be referenced directly from elsewhere. Only the always-used controls
         // (Connect, Send Current Scene, Realtime Mode) remain here.
+        //
+        // 2026-08-26 update: they first landed in a standalone ResoniteSDKDebugWindow.cs (menu:
+        // Resonite SDK/Open Debug Tools), but that window was found to be redundant with
+        // LightmapPipelineWindow.cs (menu: Resonite SDK/Lightmap Pipeline) and has since been
+        // deleted - its buttons now live in that window's "Debug / Cleanup" section instead
+        // (called via LightmapTestHarness.cs's RetryMissingAssetURLs()/ResetConversionState()/
+        // LogMessageJSON, same as its other sections). This window's own public passthrough
+        // methods below (SendMeshesOnly/SendMaterialsOnly/SendLightmapsOnly/
+        // RetryMissingAssetURLs/ResetConversionState) are unaffected by that move - they're
+        // still invoked via reflection through LightmapTestHarness.InvokeConnectedSdkSend(),
+        // same as before. CleanupConverters() is not called this way at all - it's only ever
+        // invoked internally, from ResetConversionState() itself (see that method's own
+        // comment below); it never had (and still doesn't have) a standalone button.
     }
 
     // Force an update, which should refresh the UI

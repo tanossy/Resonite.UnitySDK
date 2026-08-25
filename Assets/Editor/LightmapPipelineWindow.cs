@@ -34,6 +34,18 @@
 //                          DrawSendTimeLightTuningSection()参照。
 //   [Convert Lights]   -> Baker==Bakery のときだけ表示（Unity Standard時は非表示）
 //   [Bake] [Bake & Send] の1列のみ
+//   Debug / Cleanup    -> どちらのBakerでも常時表示。2026-08-26、ResoniteSDKDebugWindow.cs
+//                          （メニュー "Resonite SDK/Open Debug Tools"）を統廃合してここへ移設
+//                          （Tanossy指摘: "Lightmap PipelineとDebug toolが冗長すぎる。まとめて"）。
+//                          Send Meshes/Materials/Lightmaps Only（部分送信）・Retry Missing
+//                          Asset URLs・Log Messages JSON・Reset conversion state・Clear
+//                          Generated Lightmap Variantsの6点。「Cleanup converters in the
+//                          scene」と「Cleanup Resonite Components in the scene」の2ボタンは
+//                          移設せず削除した（前者はResetConversionState()が内部で
+//                          CleanupConverters()を呼ぶため常にResetで代替可能、後者は
+//                          ResoniteLinkWindow.ResetConversionState()の2026-07-15コメントが
+//                          明記する通りそもそも完全に冗長で二重破棄警告の原因だった —
+//                          詳細はDrawDebugCleanupSection()参照）。DrawDebugCleanupSection()参照。
 //   Status / Result Log
 //
 // つまみ5個は Baker==UnityStandard 専用（Bakeryは BakerySkyLight 等ambient設計が全く別物
@@ -340,6 +352,45 @@ public class LightmapPipelineWindow : EditorWindow
     const string TooltipToneMapCompensationJA = "マテリアル色とReflection Probe強度へトーンマップ近似補正を掛ける（実験的）";
     const string TooltipToneMapCompensationEN = "Apply a tonemap approximation to material colors and Reflection Probe intensity (experimental).";
 
+    // --- Debug / Cleanup section state ----------------------------------------------------
+    //
+    // 2026-08-26: folded in from the now-deleted ResoniteSDKDebugWindow.cs (menu: "Resonite
+    // SDK/Open Debug Tools") per Tanossy's feedback that having a separate Debug Tools window
+    // alongside this one was redundant. Everything here is a thin call into
+    // LightmapTestHarness.cs's public static members (RetryMissingAssetURLs() /
+    // ResetConversionState() / LogMessageJSON / ClearGeneratedLightmapVariants()), same
+    // no-logic-in-the-GUI-layer rule the rest of this file follows - see that file's own
+    // 2026-08-26 additions for what each one actually does and why it's safe to consolidate.
+    //
+    // "Send Meshes/Materials Only" buttons already existed lower in this file before this
+    // section was added; "Send Lightmaps Only" is the new third button that fills the gap
+    // (LightmapTestHarness.ConvertLightmapsOnly() already existed as a receiver, it just had
+    // no button anywhere - see LightmapTestHarness.cs's file-driven "lightmaps_only" command).
+    //
+    // Deliberately NOT included here (see the header comment's Debug/Cleanup bullet for the
+    // full reasoning): "Cleanup converters in the scene" (subsumed by Reset Conversion State,
+    // which already calls CleanupConverters() internally - see
+    // ResoniteLinkWindow.ResetConversionState()) and "Cleanup Resonite Components in the
+    // scene" (found to be entirely redundant and a source of double-destroy warnings per that
+    // same method's 2026-07-15 comment, independent of whether Reset is used).
+    const string DebugCleanupHeaderJA = "デバッグ / クリーンアップ";
+    const string DebugCleanupHeaderEN = "Debug / Cleanup";
+
+    const string TooltipSendLightmapsOnlyJA = "ライトマップのみ送信テスト（メッシュ/マテリアルは変更しない）";
+    const string TooltipSendLightmapsOnlyEN = "Send only lightmap updates for testing; meshes and materials are left untouched.";
+
+    const string TooltipRetryMissingAssetURLsJA = "URLが確定していない（送信済みだが未解決の）アセットへの送信を再試行する";
+    const string TooltipRetryMissingAssetURLsEN = "Retry sending assets that were sent but never received a resolved URL.";
+
+    const string TooltipLogMessageJSONJA = "ResoniteLinkの送受信メッセージをJSONとしてログへ出力する（デバッグ用）";
+    const string TooltipLogMessageJSONEN = "Log ResoniteLink send/receive messages as JSON (for debugging).";
+
+    const string TooltipResetConversionStateJA = "シーン内のコンバータと変換ルート(__UnityAssets/__UnitySkybox)を破棄し、変換状態を最初からやり直す。再送信の前は基本的にこれを押す運用を想定（部分送信ボタン群はResetとは独立した「一部だけ直す」用途なのでResetでは代替されない）";
+    const string TooltipResetConversionStateEN = "Destroys the scene's converters and conversion roots (__UnityAssets/__UnitySkybox) and starts the conversion state fresh. Intended to be pressed before most re-sends (the partial-send buttons above serve a separate \"fix just one part\" use case that Reset does not replace).";
+
+    const string TooltipClearGeneratedLightmapVariantsJA = "Unity側に生成済みのライトマップ差分アセット(.matファイル等、Assets/ResoniteSDK/Generated/LightmapVariants)を削除する。変換状態リセットとは別軸（Resonite側の変換状態ではなくUnity側のローカル生成物）なのでResetでは代替されない";
+    const string TooltipClearGeneratedLightmapVariantsEN = "Deletes the generated lightmap variant assets on the Unity side (.mat files etc. under Assets/ResoniteSDK/Generated/LightmapVariants). Independent from Reset Conversion State (this clears local Unity-side generated assets, not Resonite-side conversion state), so Reset does not replace it.";
+
     // Cached via reflection the first time it's needed; see GetRenderSettingsObjectForUndo().
     static MethodInfo _getRenderSettingsMethod;
 
@@ -513,15 +564,8 @@ public class LightmapPipelineWindow : EditorWindow
 
         EditorGUILayout.EndHorizontal();
 
-        EditorGUILayout.BeginHorizontal();
-
-        if (GUILayout.Button(new GUIContent("Send Meshes Only", "Send only mesh asset/provider updates; material slots are left untouched.")))
-            LightmapTestHarness.ConvertMeshesOnly();
-
-        if (GUILayout.Button(new GUIContent("Send Materials Only", "Send only material and texture updates; mesh providers are left untouched.")))
-            LightmapTestHarness.ConvertMaterialsOnly();
-
-        EditorGUILayout.EndHorizontal();
+        EditorGUILayout.Space();
+        DrawDebugCleanupSection(baking);
 
         GUI.enabled = true;
 
@@ -753,6 +797,58 @@ public class LightmapPipelineWindow : EditorWindow
 
         LightmapDecoder.RangeScale = _bakedLightmapRangeScale;
         LightmapDecoder.ColorSaturationCompensation = _bakedLightmapSaturation;
+    }
+
+    // ------------------------------------------------------------------
+    // Debug / Cleanup section — see the "Debug / Cleanup section state" field-block comment
+    // above for the full 2026-08-26 consolidation background (ResoniteSDKDebugWindow.cs
+    // removed, its buttons folded in here) and for why exactly two of its original buttons
+    // ("Cleanup converters in the scene" / "Cleanup Resonite Components in the scene") were
+    // deliberately NOT carried over. Drawn unconditionally (both bakers), same as Send-Time
+    // Options/Light Tuning/Baked Lightmap Exposure above — none of this is baker-specific.
+    // ------------------------------------------------------------------
+
+    void DrawDebugCleanupSection(bool baking)
+    {
+        EditorGUILayout.LabelField(L(DebugCleanupHeaderJA, DebugCleanupHeaderEN), EditorStyles.boldLabel);
+
+        // Partial sends: same "not gated on SDK connection state, the harness call just logs
+        // a failure to the Result Log if disconnected" behavior "Send Meshes/Materials Only"
+        // already had before this section existed — kept identical rather than adding a new
+        // connection check here.
+        GUI.enabled = !baking;
+
+        EditorGUILayout.BeginHorizontal();
+
+        if (GUILayout.Button(new GUIContent("Send Meshes Only", "Send only mesh asset/provider updates; material slots are left untouched.")))
+            LightmapTestHarness.ConvertMeshesOnly();
+
+        if (GUILayout.Button(new GUIContent("Send Materials Only", "Send only material and texture updates; mesh providers are left untouched.")))
+            LightmapTestHarness.ConvertMaterialsOnly();
+
+        if (GUILayout.Button(new GUIContent("Send Lightmaps Only", L(TooltipSendLightmapsOnlyJA, TooltipSendLightmapsOnlyEN))))
+            LightmapTestHarness.ConvertLightmapsOnly();
+
+        EditorGUILayout.EndHorizontal();
+
+        if (GUILayout.Button(new GUIContent(L("不足アセットURLを再試行", "Retry Missing Asset URLs"), L(TooltipRetryMissingAssetURLsJA, TooltipRetryMissingAssetURLsEN))))
+            LightmapTestHarness.RetryMissingAssetURLs();
+
+        LightmapTestHarness.LogMessageJSON = EditorGUILayout.Toggle(
+            new GUIContent(L("メッセージJSONをログ出力", "Log Messages JSON"), L(TooltipLogMessageJSONJA, TooltipLogMessageJSONEN)),
+            LightmapTestHarness.LogMessageJSON);
+
+        if (GUILayout.Button(new GUIContent(L("変換状態をリセット", "Reset Conversion State"), L(TooltipResetConversionStateJA, TooltipResetConversionStateEN))))
+            LightmapTestHarness.ResetConversionState();
+
+        // Purely local to the Unity project (deletes generated .mat/.png assets on disk) —
+        // needs neither an SDK connection nor "not currently baking" to run safely, same
+        // rationale ResoniteSDKDebugWindow.cs's original button had for resetting GUI.enabled
+        // to true just for this one. Kept enabled even mid-bake.
+        GUI.enabled = true;
+
+        if (GUILayout.Button(new GUIContent(L("生成済みライトマップ差分を削除", "Clear Generated Lightmap Variants"), L(TooltipClearGeneratedLightmapVariantsJA, TooltipClearGeneratedLightmapVariantsEN))))
+            LightmapTestHarness.ClearGeneratedLightmapVariants();
     }
 
     // "Bake normal detail into lightmap (experimental)" — see the file header comment's

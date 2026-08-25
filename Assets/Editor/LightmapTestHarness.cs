@@ -1698,6 +1698,68 @@ public static class LightmapTestHarness
         InvokeConnectedSdkSend("SendLightmapsOnly", "Convert Lightmaps Only");
     }
 
+    // 2026-08-26 (per Tanossy's feedback: "Lightmap Pipeline and Debug Tools are too
+    // redundant, consolidate them" - ResoniteSDKDebugWindow.cs removed, its buttons folded
+    // into LightmapPipelineWindow.cs's new "Debug / Cleanup" section): same
+    // InvokeConnectedSdkSend() wrapper pattern as ConvertMeshesOnly()/ConvertMaterialsOnly()/
+    // ConvertLightmapsOnly() above, just targeting ResoniteLinkWindow's other public
+    // passthrough methods instead of SendMeshesOnly/SendMaterialsOnly/SendLightmapsOnly.
+    public static void RetryMissingAssetURLs()
+    {
+        InvokeConnectedSdkSend("RetryMissingAssetURLs", "Retry Missing Asset URLs");
+    }
+
+    // Wraps ResoniteLinkWindow.ResetConversionState() (destroys the scene's converters +
+    // __UnityAssets/__UnitySkybox roots and starts the conversion state fresh - see that
+    // method's own doc comment on ResoniteLinkWindow.cs for the full history/rationale).
+    // Deliberately NOT given a "CleanupConverters"/"CleanupReosniteComponents" counterpart
+    // here: ResetConversionState() already calls CleanupConverters() internally, and
+    // CleanupReosniteComponents() was found to be fully redundant (see the 2026-07-15 note in
+    // ResoniteLinkWindow.ResetConversionState()'s own comment - it double-destroyed components
+    // already torn down by the CleanupConverters()/root-destruction chain). With "always Reset
+    // before re-sending" as the assumed workflow, standalone buttons for either of those two
+    // would never do anything ResetConversionState() doesn't already cover.
+    public static void ResetConversionState()
+    {
+        InvokeConnectedSdkSend("ResetConversionState", "Reset Conversion State");
+    }
+
+    // Mirrors ResoniteLinkWindow.LogMessageJSON, a plain public bool field (not a method), so
+    // LightmapPipelineWindow's Debug/Cleanup toggle doesn't need to reach into
+    // PickResoniteLinkWindow()/ResoniteLinkWindow directly - same "harness owns all the
+    // target-window plumbing" split every other method in this section keeps. A property
+    // (rather than another InvokeConnectedSdkSend-style void method) because this is a live
+    // toggle whose current value needs to be read back into the GUI every OnGUI call, not a
+    // fire-and-log action.
+    public static bool LogMessageJSON
+    {
+        get
+        {
+            var window = PickResoniteLinkWindow();
+            return window != null && window.LogMessageJSON;
+        }
+        set
+        {
+            var window = PickResoniteLinkWindow();
+            if (window != null)
+                window.LogMessageJSON = value;
+        }
+    }
+
+    // Thin wrapper around LightmapMaterialCache.ClearGeneratedLightmapVariants() (deletes
+    // Assets/ResoniteSDK/Generated/LightmapVariants - see that method's own doc comment) so
+    // LightmapPipelineWindow's Debug/Cleanup section can call it the same way it calls every
+    // other action in this file, keeping with this file's "no logic in the GUI layer" header
+    // comment. Unlike RetryMissingAssetURLs()/ResetConversionState() above, this never touches
+    // ResoniteLinkWindow/PickResoniteLinkWindow() at all - it's purely local to the Unity
+    // project (deletes generated .mat/.png assets on disk), so it needs no SDK connection and
+    // is safe to call regardless of ResoniteLinkWindow.State.
+    public static void ClearGeneratedLightmapVariants()
+    {
+        LightmapMaterialCache.ClearGeneratedLightmapVariants();
+        AppendResult("Clear Generated Lightmap Variants: done.");
+    }
+
     static void InvokeConnectedSdkSend(string methodName, string label)
     {
         var window = PickResoniteLinkWindow();
