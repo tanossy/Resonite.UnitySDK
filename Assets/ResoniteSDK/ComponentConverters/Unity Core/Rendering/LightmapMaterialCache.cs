@@ -152,15 +152,13 @@ public static class LightmapMaterialCache
     /// </summary>
     // 2026-08-08 (per Tanossy's feedback: "consolidate cleanup-type actions into one panel"):
     // moved out of its own standalone top-level menu item and into ResoniteSDKDebugWindow.cs
-    // (menu: Resonite SDK/Open Debug Tools), alongside the other cleanup/reset buttons.
-    //
-    // 2026-08-26 update: ResoniteSDKDebugWindow.cs itself was found to be redundant with
-    // LightmapPipelineWindow.cs (menu: Resonite SDK/Lightmap Pipeline) and has since been
-    // deleted - the "Clear Generated Lightmap Variants" button now lives in that window's
-    // "Debug / Cleanup" section instead, calling this same method via a thin
-    // LightmapTestHarness.ClearGeneratedLightmapVariants() wrapper (keeping with that window's
-    // own "no logic in the GUI layer" rule). This method itself is unchanged either time -
-    // only the calling [MenuItem]/button entry point moved.
+    // (menu: Resonite SDK/Open Debug Tools), alongside the other cleanup/reset buttons. That
+    // window was later folded into LightmapPipelineWindow.cs's "Debug / Cleanup" section
+    // (2026-08-26), and the standalone button itself was removed entirely on 2026-08-27 (per
+    // Tanossy's feedback that a manual button only makes sense if the user can tell when it's
+    // their job to press it - this one couldn't). This method is unchanged by any of that -
+    // its only remaining caller is SceneConverter.ConvertScene(), which already calls it
+    // automatically whenever the "Force Refresh Generated Lightmaps" toggle is on.
     public static void ClearGeneratedLightmapVariants()
     {
         _materialByPath.Clear();

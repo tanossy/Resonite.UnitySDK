@@ -184,15 +184,22 @@ public class ResoniteLinkWindow : EditorWindow
         // 2026-08-26 update: they first landed in a standalone ResoniteSDKDebugWindow.cs (menu:
         // Resonite SDK/Open Debug Tools), but that window was found to be redundant with
         // LightmapPipelineWindow.cs (menu: Resonite SDK/Lightmap Pipeline) and has since been
-        // deleted - its buttons now live in that window's "Debug / Cleanup" section instead
-        // (called via LightmapTestHarness.cs's RetryMissingAssetURLs()/ResetConversionState()/
-        // LogMessageJSON, same as its other sections). This window's own public passthrough
-        // methods below (SendMeshesOnly/SendMaterialsOnly/SendLightmapsOnly/
-        // RetryMissingAssetURLs/ResetConversionState) are unaffected by that move - they're
-        // still invoked via reflection through LightmapTestHarness.InvokeConnectedSdkSend(),
-        // same as before. CleanupConverters() is not called this way at all - it's only ever
-        // invoked internally, from ResetConversionState() itself (see that method's own
-        // comment below); it never had (and still doesn't have) a standalone button.
+        // deleted - its remaining buttons now live in that window's "Debug / Cleanup" section
+        // instead (called via LightmapTestHarness.cs's RetryMissingAssetURLs()/LogMessageJSON,
+        // same as its other sections). This window's own public passthrough methods below
+        // (SendMeshesOnly/SendMaterialsOnly/SendLightmapsOnly/RetryMissingAssetURLs) are
+        // unaffected by that move - they're still invoked via reflection through
+        // LightmapTestHarness.InvokeConnectedSdkSend(), same as before.
+        //
+        // 2026-08-27: ResetConversionState() lost its own manual button (LightmapTestHarness's
+        // wrapper was deleted) for the same reason as the two Cleanup buttons it already
+        // subsumed - EnsureConverter() below already calls it automatically whenever
+        // UniqueSessionId/Port changes or _converter.IsCorrupted gets set, so there was no
+        // remaining case where a human needed to decide to press it. The method itself stays
+        // exactly as-is; only its standalone entry point is gone. CleanupConverters() is not
+        // called from a button at all - it's only ever invoked internally, from
+        // ResetConversionState() itself (see that method's own comment below); it never had
+        // (and still doesn't have) a standalone button.
     }
 
     // Force an update, which should refresh the UI

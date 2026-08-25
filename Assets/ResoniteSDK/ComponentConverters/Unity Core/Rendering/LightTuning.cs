@@ -1,12 +1,12 @@
 using UnityEngine;
 
 // 2026-08-08 (per Tanossy's feedback: "I want to touch the original upstream source as little as
-// possible, so factor this out"): send-time tuning values used to replace just the two
-// Intensity/Color assignment lines inside LightHelper.SetFrom() in the official LightConverter.cs.
-// The tuning values and logic have been factored out entirely into this new file, so that the
-// only change needed on the official file's side is swapping in these two lines:
-// `resonite.Intensity = LightTuning.ApplyIntensity(unity.intensity);` /
-// `resonite.Color = new ColorX(LightTuning.ApplyColor(unity.color));`
+// possible, so factor this out"): send-time tuning values used to replace just the Intensity
+// assignment line inside LightHelper.SetFrom() in the official LightConverter.cs (originally
+// also the Color line, via a WhiteBalanceShift blend - removed 2026-08-27, see below). The
+// tuning value and logic have been factored out entirely into this new file, so that the only
+// change needed on the official file's side is swapping in this one line:
+// `resonite.Intensity = LightTuning.ApplyIntensity(unity.intensity);`
 public static class LightTuning
 {
     // 2026-08-08 (in response to Tanossy's feedback of "too dark"): in Unity, Light.intensity=0.5
@@ -58,33 +58,13 @@ public static class LightTuning
     // either scene under this new formula - Unity MCP was disconnected when this was written.
     public static float IntensityCeiling = 0.9f;
 
-    // 2026-08-08 (per Tanossy's feedback: "too much yellow, want to boost the whiteness"): the
-    // room's light color is being transferred straight through from Unity as a warm tone (roughly
-    // ColorX(1, 0.89, 0.75)), and this reads as more yellow than intended once it's in Resonite.
-    // The light color itself is blended toward white at send time only (0 = Unity's color
-    // unchanged, 1 = pure white). Finalized at 0.4 -> 0.7.
-    //
-    // 2026-08-24 (per Tanossy's feedback: opposite direction - "barely any yellow left, looks
-    // almost white"): confirmed live (Point Light color read back as ColorX(1, 0.979, 0.933) at
-    // 0.7), and 0.7 also left almost no headroom for the separate in-world Light Tuning Panel's
-    // own White Balance slider (which only Lerps further from whatever baseline was actually
-    // sent - it can't recover color this static field already blended away before send).
-    // 0.7 itself turned out to be too strong; 0.4 (the value it replaced) was rejected earlier
-    // for the opposite reason ("too much yellow"). Split the difference to 0.55 as a starting
-    // point bracketed by both known-bad real-machine data points - still unverified at this
-    // exact value, re-check live after the next send (the Lightmap Pipeline panel's own
-    // "Send-Time Light Tuning" slider can be nudged further without a code edit).
-    //
-    // Known limitation (2026-08-08, explained to the user and agreed to leave as-is for now):
-    // since this Lerps uniformly toward white regardless of the original hue, if a scene has
-    // multiple light sources of different colors, their original color differences get equally
-    // diluted (this world only has a single warm-toned lighting scheme, so it was judged to cause
-    // no real harm; properly addressing it is deferred to a future pass).
-    public static float WhiteBalanceShift = 0.55f;
-
+    // 2026-08-08 through 2026-08-24: this file used to also carry a WhiteBalanceShift field +
+    // ApplyColor() method that Lerp'd each light's color toward white at send time, tuned
+    // through several rounds (0.4 -> 0.7 -> 0.55) chasing "too yellow"/"too white" feedback in
+    // both directions. Removed entirely on 2026-08-27 (per Tanossy's feedback: "white balance
+    // isn't needed") - light color now passes straight through unchanged in LightConverter.cs,
+    // same as before 2026-08-08. Only ApplyIntensity/IntensityCeiling remain below.
     public static float ApplyIntensity(float unityIntensity) => unityIntensity * GetEffectiveIntensityMultiplier();
-
-    public static Color ApplyColor(Color unityColor) => Color.Lerp(unityColor, Color.white, Mathf.Clamp01(WhiteBalanceShift));
 
     // Recomputed from the live scene on every call rather than cached: this only ever runs
     // during an Editor-time scene conversion (never per-frame/runtime), so even a few hundred

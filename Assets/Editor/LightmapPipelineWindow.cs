@@ -29,8 +29,9 @@
 //                          Send Tonemap Compensation（旧・Resonite SDKパネルにあった非vanilla
 //                          トグル2個、2026-08-18移設）。DrawSendTimeOptionsSection()参照。
 //   送信時ライト調整   -> どちらのBakerでも常時表示（ResoniteSDK/LightTuning.csの
-//                          IntensityCeiling/WhiteBalanceShiftを直接編集。ベイク結果自体では
-//                          なく変換/送信時にのみ効く値のためBaker非依存）。
+//                          IntensityCeilingを直接編集。ベイク結果自体ではなく変換/送信時にのみ
+//                          効く値のためBaker非依存。2026-08-27、WhiteBalanceShiftは不要と判断
+//                          し撤去済み）。
 //                          DrawSendTimeLightTuningSection()参照。
 //   [Convert Lights]   -> Baker==Bakery のときだけ表示（Unity Standard時は非表示）
 //   [Bake] [Bake & Send] の1列のみ
@@ -38,14 +39,13 @@
 //                          （メニュー "Resonite SDK/Open Debug Tools"）を統廃合してここへ移設
 //                          （Tanossy指摘: "Lightmap PipelineとDebug toolが冗長すぎる。まとめて"）。
 //                          Send Meshes/Materials/Lightmaps Only（部分送信）・Retry Missing
-//                          Asset URLs・Log Messages JSON・Reset conversion state・Clear
-//                          Generated Lightmap Variantsの6点。「Cleanup converters in the
-//                          scene」と「Cleanup Resonite Components in the scene」の2ボタンは
-//                          移設せず削除した（前者はResetConversionState()が内部で
-//                          CleanupConverters()を呼ぶため常にResetで代替可能、後者は
-//                          ResoniteLinkWindow.ResetConversionState()の2026-07-15コメントが
-//                          明記する通りそもそも完全に冗長で二重破棄警告の原因だった —
-//                          詳細はDrawDebugCleanupSection()参照）。DrawDebugCleanupSection()参照。
+//                          Asset URLs・Log Messages JSONの4点。「Cleanup converters in the
+//                          scene」「Cleanup Resonite Components in the scene」に加え、
+//                          2026-08-27には「Reset conversion state」「Clear Generated Lightmap
+//                          Variants」の2ボタンも撤去した（いつ押せばいいか利用者が判断しない
+//                          といけないこと自体が複雑さの元、とのTanossy指摘。どちらも既に
+//                          自動で走るため手動操作の出番が無い — 詳細はDrawDebugCleanupSection()
+//                          参照）。
 //   Status / Result Log
 //
 // つまみ5個は Baker==UnityStandard 専用（Bakeryは BakerySkyLight 等ambient設計が全く別物
@@ -293,17 +293,16 @@ public class LightmapPipelineWindow : EditorWindow
     // Kept as this window's own fields (synced into LightTuning's statics every OnGUI, same
     // pattern DrawLightingSection() already uses for its own knobs) so the values are
     // editable from this panel instead of requiring a code edit.
+    // 2026-08-27 (per Tanossy's feedback: "white balance isn't needed"): removed
+    // _lightWhiteBalanceShift and its slider along with LightTuning.WhiteBalanceShift itself
+    // (see that file). Only the intensity knob remains below.
     float _lightIntensityCeiling = 0.9f;
-    float _lightWhiteBalanceShift = 0.55f;
 
     const string SendTimeTuningHeaderJA = "送信時ライト調整";
     const string SendTimeTuningHeaderEN = "Send-Time Light Tuning";
 
     const string TooltipIntensityCeilingJA = "シーン内で最も明るいライトが送信時にこの値になるよう、全ライトへ同じ比率で倍率を逆算する（固定倍率ではなくシーンごとに自動正規化）";
     const string TooltipIntensityCeilingEN = "Target intensity for the scene's single brightest light at send time; every light is scaled by the same ratio needed to put the brightest one exactly here (self-normalizing per scene, not a fixed multiplier).";
-
-    const string TooltipWhiteBalanceShiftJA = "光源色を送信時だけ白側へブレンドする（0=元の色のまま、1=純白）";
-    const string TooltipWhiteBalanceShiftEN = "Blends each light's color toward white at send time (0 = unchanged, 1 = pure white).";
 
     // --- Baked Lightmap Exposure section state --------------------------------------------
     //
@@ -358,21 +357,28 @@ public class LightmapPipelineWindow : EditorWindow
     // SDK/Open Debug Tools") per Tanossy's feedback that having a separate Debug Tools window
     // alongside this one was redundant. Everything here is a thin call into
     // LightmapTestHarness.cs's public static members (RetryMissingAssetURLs() /
-    // ResetConversionState() / LogMessageJSON / ClearGeneratedLightmapVariants()), same
-    // no-logic-in-the-GUI-layer rule the rest of this file follows - see that file's own
-    // 2026-08-26 additions for what each one actually does and why it's safe to consolidate.
+    // LogMessageJSON), same no-logic-in-the-GUI-layer rule the rest of this file follows.
     //
     // "Send Meshes/Materials Only" buttons already existed lower in this file before this
     // section was added; "Send Lightmaps Only" is the new third button that fills the gap
     // (LightmapTestHarness.ConvertLightmapsOnly() already existed as a receiver, it just had
     // no button anywhere - see LightmapTestHarness.cs's file-driven "lightmaps_only" command).
     //
-    // Deliberately NOT included here (see the header comment's Debug/Cleanup bullet for the
-    // full reasoning): "Cleanup converters in the scene" (subsumed by Reset Conversion State,
-    // which already calls CleanupConverters() internally - see
-    // ResoniteLinkWindow.ResetConversionState()) and "Cleanup Resonite Components in the
-    // scene" (found to be entirely redundant and a source of double-destroy warnings per that
-    // same method's 2026-07-15 comment, independent of whether Reset is used).
+    // Deliberately NOT included here: "Cleanup converters in the scene" and "Cleanup Resonite
+    // Components in the scene" (see ResoniteLinkWindow.ResetConversionState()'s own comment -
+    // both are subsumed/redundant with what that method already does internally). 2026-08-27:
+    // also removed the "Reset Conversion State" and "Clear Generated Lightmap Variants"
+    // buttons that used to be here, for the same reason Tanossy raised about the two above -
+    // a button only worth having if the user can tell when it's their job to press it, and
+    // neither one actually needed a human to decide that:
+    //   - Reset Conversion State: ResoniteLinkWindow.EnsureConverter() already resets whenever
+    //     UniqueSessionId/Port changes OR _converter.IsCorrupted is set, and IsCorrupted is
+    //     exactly what a timeout or mid-send disconnect sets (SceneConverter.cs's catch
+    //     blocks) - so pressing any Send button again already self-heals with no extra step.
+    //   - Clear Generated Lightmap Variants: SceneConverter.ConvertScene() already calls
+    //     LightmapMaterialCache.ClearGeneratedLightmapVariants() automatically whenever the
+    //     "Force Refresh Generated Lightmaps" toggle (Send-Time Options section, above) is on -
+    //     that toggle is the discoverable, one-click equivalent.
     const string DebugCleanupHeaderJA = "デバッグ / クリーンアップ";
     const string DebugCleanupHeaderEN = "Debug / Cleanup";
 
@@ -395,18 +401,6 @@ public class LightmapPipelineWindow : EditorWindow
 
     const string TooltipLogMessageJSONJA = "ResoniteLinkの送受信メッセージをJSONとしてログへ出力する（デバッグ用）";
     const string TooltipLogMessageJSONEN = "Log ResoniteLink send/receive messages as JSON (for debugging).";
-
-    // 2026-08-27 (per Tanossy's feedback: the previous tooltip's "press this before most
-    // re-sends" framing was misleading): SceneConverter.EnsureConverter() already auto-resets
-    // whenever UniqueSessionId or Port actually changes, so a normal healthy re-send never needs
-    // this pressed manually. It's a recovery step for the case that auto-detection can't catch -
-    // the session/port stayed the same but something got stuck anyway (e.g. after the 60-second
-    // AssetConverter.cs timeout, or a WebSocket disconnect mid-send).
-    const string TooltipResetConversionStateJA = "シーン内のコンバータと変換ルート(__UnityAssets/__UnitySkybox)を破棄し、変換状態を最初からやり直す。セッションID/ポートが変わった時は自動でリセットされるため、通常の送信では不要。タイムアウトやWebSocket切断など、自動検知できない形で状態が壊れた時にだけ押す（部分送信ボタン群はResetとは独立した「一部だけ直す」用途なのでResetでは代替されない）";
-    const string TooltipResetConversionStateEN = "Destroys the scene's converters and conversion roots (__UnityAssets/__UnitySkybox) and starts the conversion state fresh. A normal send doesn't need this - EnsureConverter() already resets automatically whenever the session/port changes. Press it when something breaks in a way that auto-detection can't catch (e.g. a timeout or WebSocket disconnect mid-send), not routinely (the partial-send buttons above serve a separate \"fix just one part\" use case that Reset does not replace).";
-
-    const string TooltipClearGeneratedLightmapVariantsJA = "Unity側に生成済みのライトマップ差分アセット(.matファイル等、Assets/ResoniteSDK/Generated/LightmapVariants)を削除する。変換状態リセットとは別軸（Resonite側の変換状態ではなくUnity側のローカル生成物）なのでResetでは代替されない";
-    const string TooltipClearGeneratedLightmapVariantsEN = "Deletes the generated lightmap variant assets on the Unity side (.mat files etc. under Assets/ResoniteSDK/Generated/LightmapVariants). Independent from Reset Conversion State (this clears local Unity-side generated assets, not Resonite-side conversion state), so Reset does not replace it.";
 
     // Cached via reflection the first time it's needed; see GetRenderSettingsObjectForUndo().
     static MethodInfo _getRenderSettingsMethod;
@@ -774,18 +768,17 @@ public class LightmapPipelineWindow : EditorWindow
 
     // ------------------------------------------------------------------
     // Send-Time Light Tuning section — see the field-block comment above (near
-    // _lightIntensityCeiling/_lightWhiteBalanceShift) for why this is drawn unconditionally
-    // (both bakers) rather than only for LightBaker.UnityStandard like DrawLightingSection().
-    // No "Apply" button here either — the values are synced straight into
-    // LightTuning's static fields on every OnGUI call, so they take effect on whatever the
-    // next Send Current Scene/Bake & Send actually does, without needing a scene edit first.
+    // _lightIntensityCeiling) for why this is drawn unconditionally (both bakers) rather than
+    // only for LightBaker.UnityStandard like DrawLightingSection(). No "Apply" button here
+    // either — the value is synced straight into LightTuning's static field on every OnGUI
+    // call, so it takes effect on whatever the next Send Current Scene/Bake & Send actually
+    // does, without needing a scene edit first.
     // ------------------------------------------------------------------
 
-    // Defaults the "Reset to Defaults" button below restores - kept as named constants (rather
-    // than repeating the field initializers' literals inline at the button call site) so the
-    // two stay in sync if either default is ever re-tuned again.
+    // Default the "Reset to Defaults" button below restores - kept as a named constant (rather
+    // than repeating the field initializer's literal inline at the button call site) so the
+    // two stay in sync if the default is ever re-tuned again.
     const float DefaultLightIntensityCeiling = 0.9f;
-    const float DefaultLightWhiteBalanceShift = 0.55f;
 
     void DrawSendTimeLightTuningSection(bool baking)
     {
@@ -797,25 +790,19 @@ public class LightmapPipelineWindow : EditorWindow
             new GUIContent(L("明るさの上限", "Intensity Ceiling"), L(TooltipIntensityCeilingJA, TooltipIntensityCeilingEN)),
             _lightIntensityCeiling, 0.1f, 3f);
 
-        _lightWhiteBalanceShift = EditorGUILayout.Slider(
-            new GUIContent(L("白色寄せ", "White Balance Shift"), L(TooltipWhiteBalanceShiftJA, TooltipWhiteBalanceShiftEN)),
-            _lightWhiteBalanceShift, 0f, 1f);
-
         // 2026-08-27 (per Tanossy's feedback: "a reset button for the sliders is needed"):
-        // restores both sliders to the tuned defaults above, not to some neutral/no-op value -
-        // these two were arrived at through several rounds of live-tuning earlier (see
-        // LightTuning.cs's own field comments), so "reset" here means "back to the last known
-        // good values", the same way undoing an accidental drag would.
+        // restores the slider to the tuned default above, not to some neutral/no-op value -
+        // it was arrived at through several rounds of live-tuning earlier (see LightTuning.cs's
+        // own field comments), so "reset" here means "back to the last known good value", the
+        // same way undoing an accidental drag would.
         if (GUILayout.Button(new GUIContent(L("既定値に戻す", "Reset to Defaults"), L(
-            "明るさの上限・白色寄せを、実機で調整済みの既定値に戻す",
-            "Restores Intensity Ceiling and White Balance Shift to their real-machine-tuned default values."))))
+            "明るさの上限を、実機で調整済みの既定値に戻す",
+            "Restores Intensity Ceiling to its real-machine-tuned default value."))))
         {
             _lightIntensityCeiling = DefaultLightIntensityCeiling;
-            _lightWhiteBalanceShift = DefaultLightWhiteBalanceShift;
         }
 
         LightTuning.IntensityCeiling = _lightIntensityCeiling;
-        LightTuning.WhiteBalanceShift = _lightWhiteBalanceShift;
     }
 
     // ------------------------------------------------------------------
@@ -885,18 +872,6 @@ public class LightmapPipelineWindow : EditorWindow
         LightmapTestHarness.LogMessageJSON = EditorGUILayout.Toggle(
             new GUIContent(L("メッセージJSONをログ出力", "Log Messages JSON"), L(TooltipLogMessageJSONJA, TooltipLogMessageJSONEN)),
             LightmapTestHarness.LogMessageJSON);
-
-        if (GUILayout.Button(new GUIContent(L("変換状態をリセット", "Reset Conversion State"), L(TooltipResetConversionStateJA, TooltipResetConversionStateEN))))
-            LightmapTestHarness.ResetConversionState();
-
-        // Purely local to the Unity project (deletes generated .mat/.png assets on disk) —
-        // needs neither an SDK connection nor "not currently baking" to run safely, same
-        // rationale ResoniteSDKDebugWindow.cs's original button had for resetting GUI.enabled
-        // to true just for this one. Kept enabled even mid-bake.
-        GUI.enabled = true;
-
-        if (GUILayout.Button(new GUIContent(L("生成済みライトマップ差分を削除", "Clear Generated Lightmap Variants"), L(TooltipClearGeneratedLightmapVariantsJA, TooltipClearGeneratedLightmapVariantsEN))))
-            LightmapTestHarness.ClearGeneratedLightmapVariants();
     }
 
     // "Bake normal detail into lightmap (experimental)" — see the file header comment's

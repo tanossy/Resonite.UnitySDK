@@ -1709,20 +1709,14 @@ public static class LightmapTestHarness
         InvokeConnectedSdkSend("RetryMissingAssetURLs", "Retry Missing Asset URLs");
     }
 
-    // Wraps ResoniteLinkWindow.ResetConversionState() (destroys the scene's converters +
-    // __UnityAssets/__UnitySkybox roots and starts the conversion state fresh - see that
-    // method's own doc comment on ResoniteLinkWindow.cs for the full history/rationale).
-    // Deliberately NOT given a "CleanupConverters"/"CleanupReosniteComponents" counterpart
-    // here: ResetConversionState() already calls CleanupConverters() internally, and
-    // CleanupReosniteComponents() was found to be fully redundant (see the 2026-07-15 note in
-    // ResoniteLinkWindow.ResetConversionState()'s own comment - it double-destroyed components
-    // already torn down by the CleanupConverters()/root-destruction chain). With "always Reset
-    // before re-sending" as the assumed workflow, standalone buttons for either of those two
-    // would never do anything ResetConversionState() doesn't already cover.
-    public static void ResetConversionState()
-    {
-        InvokeConnectedSdkSend("ResetConversionState", "Reset Conversion State");
-    }
+    // 2026-08-27 removal (per Tanossy's feedback: having a manual "Reset Conversion State"
+    // button meant the user had to guess when it was their job to press it, which is worse
+    // than the button being unnecessary in the first place): deleted the wrapper that used to
+    // live here. ResoniteLinkWindow.EnsureConverter() already resets on its own whenever
+    // UniqueSessionId/Port changes OR _converter.IsCorrupted is set (see that method), and
+    // IsCorrupted is exactly what a timeout/mid-send disconnect sets (SceneConverter.cs's
+    // catch blocks) - so simply pressing any Send button again already self-heals with no
+    // separate step. There is no longer any path where a user needs to reason about this.
 
     // Mirrors ResoniteLinkWindow.LogMessageJSON, a plain public bool field (not a method), so
     // LightmapPipelineWindow's Debug/Cleanup toggle doesn't need to reach into
@@ -1746,19 +1740,13 @@ public static class LightmapTestHarness
         }
     }
 
-    // Thin wrapper around LightmapMaterialCache.ClearGeneratedLightmapVariants() (deletes
-    // Assets/ResoniteSDK/Generated/LightmapVariants - see that method's own doc comment) so
-    // LightmapPipelineWindow's Debug/Cleanup section can call it the same way it calls every
-    // other action in this file, keeping with this file's "no logic in the GUI layer" header
-    // comment. Unlike RetryMissingAssetURLs()/ResetConversionState() above, this never touches
-    // ResoniteLinkWindow/PickResoniteLinkWindow() at all - it's purely local to the Unity
-    // project (deletes generated .mat/.png assets on disk), so it needs no SDK connection and
-    // is safe to call regardless of ResoniteLinkWindow.State.
-    public static void ClearGeneratedLightmapVariants()
-    {
-        LightmapMaterialCache.ClearGeneratedLightmapVariants();
-        AppendResult("Clear Generated Lightmap Variants: done.");
-    }
+    // 2026-08-27 removal (per Tanossy's feedback, same reasoning as ResetConversionState()
+    // above): deleted the wrapper that used to live here. LightmapMaterialCache
+    // .ClearGeneratedLightmapVariants() itself is unchanged and still runs - just no longer
+    // from a manual button. SceneConverter.ConvertScene() already calls it automatically
+    // whenever the "Force Refresh Generated Lightmaps" toggle (Lightmap Pipeline's Send-Time
+    // Options section) is on, which is the one-click, discoverable equivalent: check it before
+    // your next send instead of hunting for a separate debug button.
 
     static void InvokeConnectedSdkSend(string methodName, string label)
     {

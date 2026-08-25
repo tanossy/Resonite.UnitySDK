@@ -29,8 +29,12 @@ public static class LightHelper
 
         // 2026-08-08: the send-time tuning values/logic have been moved out to LightTuning (a
         // separate file, LightTuning.cs, in the same folder).
+        //
+        // 2026-08-27 (per Tanossy's feedback: "white balance isn't needed"): the send-time
+        // white-balance color blend (LightTuning.ApplyColor/WhiteBalanceShift) was removed
+        // entirely - color now passes through unchanged, same as it did before 2026-08-08.
         resonite.Intensity = LightTuning.ApplyIntensity(unity.intensity);
-        resonite.Color = new ColorX(LightTuning.ApplyColor(unity.color));
+        resonite.Color = new ColorX(unity.color);
 
         switch (unity.shadows)
         {
