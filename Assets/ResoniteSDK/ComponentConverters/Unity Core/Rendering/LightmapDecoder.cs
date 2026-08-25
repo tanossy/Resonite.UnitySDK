@@ -79,7 +79,7 @@ public static class LightmapDecoder
     // 2026-08-18: this is a single global constant, but the "right" boost depends on how dark a
     // given room's own bake data is - a value tuned for one scene isn't guaranteed to fit another
     // (same class of bug LightTuning.IntensityCeiling was introduced to fix on the real-time-light
-    // side, just never applied here). Exposed as a slider in the Lightmap Pipeline panel's
+    // side, just never applied here). Exposed as a slider in the Lightmap Bake & Send panel's
     // "Send-Time Light Tuning" section (see LightmapPipelineWindow.cs) so it can be re-tuned per
     // room without a code edit; changing it here still works too (both write the same field).
     public static float RangeScale = 1.1f;

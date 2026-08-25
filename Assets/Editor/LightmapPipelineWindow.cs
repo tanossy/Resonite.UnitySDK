@@ -3,7 +3,7 @@
 // ライトマップパイプライン操作パネル。「品質プリセット選択→ベイク→自動送信」を
 // ワンボタン化する便利UI。
 //
-// メニュー: "Resonite SDK/Lightmap Pipeline"
+// メニュー: "Resonite SDK/Lightmap Bake & Send"
 //
 // これは意図的に薄いUI層である。ベイク/変換のロジックは一切ここに置かず、すべて
 // LightmapTestHarness.cs 側の public static メソッド/プロパティを呼ぶだけに徹する
@@ -37,7 +37,7 @@
 //   [Bake] [Bake & Send] の1列のみ
 //   Debug / Cleanup    -> どちらのBakerでも常時表示。2026-08-26、ResoniteSDKDebugWindow.cs
 //                          （メニュー "Resonite SDK/Open Debug Tools"）を統廃合してここへ移設
-//                          （Tanossy指摘: "Lightmap PipelineとDebug toolが冗長すぎる。まとめて"）。
+//                          （Tanossy指摘: "Lightmap Bake & SendとDebug toolが冗長すぎる。まとめて"）。
 //                          Send Meshes/Materials/Lightmaps Only（部分送信）・Retry Missing
 //                          Asset URLs・Log Messages JSONの4点。「Cleanup converters in the
 //                          scene」「Cleanup Resonite Components in the scene」に加え、
@@ -405,10 +405,10 @@ public class LightmapPipelineWindow : EditorWindow
     // Cached via reflection the first time it's needed; see GetRenderSettingsObjectForUndo().
     static MethodInfo _getRenderSettingsMethod;
 
-    [MenuItem("Resonite SDK/Lightmap Pipeline")]
+    [MenuItem("Resonite SDK/Lightmap Bake & Send")]
     static void ShowWindow()
     {
-        var window = GetWindow<LightmapPipelineWindow>("Lightmap Pipeline");
+        var window = GetWindow<LightmapPipelineWindow>("Lightmap Bake & Send");
         window.minSize = new Vector2(360f, 420f);
     }
 
