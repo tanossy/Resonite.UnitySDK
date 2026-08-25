@@ -385,8 +385,14 @@ public class LightmapPipelineWindow : EditorWindow
     const string TooltipLogMessageJSONJA = "ResoniteLinkの送受信メッセージをJSONとしてログへ出力する（デバッグ用）";
     const string TooltipLogMessageJSONEN = "Log ResoniteLink send/receive messages as JSON (for debugging).";
 
-    const string TooltipResetConversionStateJA = "シーン内のコンバータと変換ルート(__UnityAssets/__UnitySkybox)を破棄し、変換状態を最初からやり直す。再送信の前は基本的にこれを押す運用を想定（部分送信ボタン群はResetとは独立した「一部だけ直す」用途なのでResetでは代替されない）";
-    const string TooltipResetConversionStateEN = "Destroys the scene's converters and conversion roots (__UnityAssets/__UnitySkybox) and starts the conversion state fresh. Intended to be pressed before most re-sends (the partial-send buttons above serve a separate \"fix just one part\" use case that Reset does not replace).";
+    // 2026-08-27 (per Tanossy's feedback: the previous tooltip's "press this before most
+    // re-sends" framing was misleading): SceneConverter.EnsureConverter() already auto-resets
+    // whenever UniqueSessionId or Port actually changes, so a normal healthy re-send never needs
+    // this pressed manually. It's a recovery step for the case that auto-detection can't catch -
+    // the session/port stayed the same but something got stuck anyway (e.g. after the 60-second
+    // AssetConverter.cs timeout, or a WebSocket disconnect mid-send).
+    const string TooltipResetConversionStateJA = "シーン内のコンバータと変換ルート(__UnityAssets/__UnitySkybox)を破棄し、変換状態を最初からやり直す。セッションID/ポートが変わった時は自動でリセットされるため、通常の送信では不要。タイムアウトやWebSocket切断など、自動検知できない形で状態が壊れた時にだけ押す（部分送信ボタン群はResetとは独立した「一部だけ直す」用途なのでResetでは代替されない）";
+    const string TooltipResetConversionStateEN = "Destroys the scene's converters and conversion roots (__UnityAssets/__UnitySkybox) and starts the conversion state fresh. A normal send doesn't need this - EnsureConverter() already resets automatically whenever the session/port changes. Press it when something breaks in a way that auto-detection can't catch (e.g. a timeout or WebSocket disconnect mid-send), not routinely (the partial-send buttons above serve a separate \"fix just one part\" use case that Reset does not replace).";
 
     const string TooltipClearGeneratedLightmapVariantsJA = "Unity側に生成済みのライトマップ差分アセット(.matファイル等、Assets/ResoniteSDK/Generated/LightmapVariants)を削除する。変換状態リセットとは別軸（Resonite側の変換状態ではなくUnity側のローカル生成物）なのでResetでは代替されない";
     const string TooltipClearGeneratedLightmapVariantsEN = "Deletes the generated lightmap variant assets on the Unity side (.mat files etc. under Assets/ResoniteSDK/Generated/LightmapVariants). Independent from Reset Conversion State (this clears local Unity-side generated assets, not Resonite-side conversion state), so Reset does not replace it.";
