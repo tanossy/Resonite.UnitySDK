@@ -62,8 +62,15 @@ public class MeshColliderConverter : ResoniteComponentConverter<UnityEngine.Mesh
         }
     }
 
+    // 2026-08-27: only explicitly destroys its wrapper components when the caller set
+    // ExplicitCleanupRequested (see ResoniteComponentConverter.cs's field comment) - otherwise
+    // this converter's whole GameObject is being destroyed as a unit, and doing so here too is
+    // redundant (triggers Unity's "Destroying object multiple times" warning).
     protected override void Cleanup()
     {
+        if (!ExplicitCleanupRequested)
+            return;
+
         if (MeshBinding != null)
             DestroyImmediate(MeshBinding);
 

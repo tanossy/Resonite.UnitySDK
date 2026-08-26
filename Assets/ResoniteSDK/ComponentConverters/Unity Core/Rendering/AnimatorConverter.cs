@@ -119,8 +119,14 @@ public class AnimatorConverter : ResoniteComponentConverter<UnityEngine.Animator
             DestroyImmediate(BipedRig);
     }
 
+    // 2026-08-27: guarded on ExplicitCleanupRequested (see ResoniteComponentConverter.cs) so
+    // this doesn't redundantly re-destroy BipedRig when the whole GameObject is already being
+    // torn down as a unit (e.g. Bakery's scene-setup restore during a bake).
     protected override void Cleanup()
     {
+        if (!ExplicitCleanupRequested)
+            return;
+
         if (BipedRig != null)
             DestroyImmediate(BipedRig);
     }

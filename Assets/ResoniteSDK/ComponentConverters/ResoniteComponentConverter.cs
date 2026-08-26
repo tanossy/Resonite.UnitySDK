@@ -7,6 +7,28 @@ public abstract class ResoniteComponentConverter : MonoBehaviour
     [SerializeField]
     public Component Target;
 
+    // 2026-08-27 (per Tanossy's feedback, after seeing dozens of "Destroying object multiple
+    // times" warnings flood the console on every single Bakery bake): a converter and its
+    // Resonite-side wrapper component(s) always live on the same GameObject as the original
+    // Unity component (see SceneConverter.UpdateComponentConversions()'s
+    // `root.gameObject.AddComponent(converterInfo.Type)`). Cleanup() used to unconditionally
+    // DestroyImmediate() those wrapper components from OnDestroy() - correct when a caller
+    // destroys just the converter component and the GameObject survives (the only two real
+    // callers: SceneConverter.UpdateComponentConversions() when the Unity source component was
+    // removed, and ResoniteLinkWindow.CleanupConverters() during a full reset), but redundant
+    // whenever the whole GameObject is destroyed as a unit instead - e.g. deleting a Light in
+    // the Hierarchy, or Bakery's RestoreSceneManagerSetup() tearing down its temporary bake
+    // scene, which destroys every object in it (converters, wrappers, everything) in one
+    // cascade. In that case the wrapper is already being destroyed by the same cascade, and
+    // Cleanup() trying to destroy it again is exactly what triggers Unity's warning.
+    //
+    // Fix: only the two real explicit-destroy callers above set this flag right before their
+    // DestroyImmediate(converter) call. Every other OnDestroy() (GameObject/scene teardown)
+    // leaves it false, and Cleanup() implementations now skip their explicit wrapper-destroy
+    // calls in that case, trusting Unity's own cascade to handle it - which it always does
+    // correctly and silently on its own.
+    public bool ExplicitCleanupRequested;
+
     public void Initialize(Component target)
     {
         Target = target;
@@ -74,6 +96,9 @@ public abstract class ResoniteSingleComponentConverter<TUnity, TResoniteWrapper>
 
     protected override void Cleanup()
     {
+        if (!ExplicitCleanupRequested)
+            return;
+
         // Cleanup the binding if it still exists
         if (Binding == null)
             return;

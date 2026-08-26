@@ -371,6 +371,21 @@ public class SceneConverter : IConversionContext
 
             SendOperationBatch(messages);
 
+            // 2026-08-26 (per Tanossy's direction, after 7 rounds of new C# Resonite.UnitySDK.
+            // Bindings-specific bugs surfacing one per layer while building the "Light Tuning
+            // Panel" via that SDK - see LightTuningPanelBuilder.cs's own header comment for the
+            // full history): rather than build the panel's UIX/ProtoFlux graph through this SDK's
+            // typed component wrappers, this now only writes out each light's baseline data
+            // (slot id / intensity / color) and hands off to a separate, deterministic Python
+            // script that reconstructs the panel via raw ResoniteLink JSON - the same technique
+            // already proven (real server, real visible result) in the original 2026-08-24
+            // hand-built version this whole feature is based on. Placed after SendOperationBatch
+            // (not before) so this only runs once the room itself is confirmed sent - if
+            // SendOperationBatch throws, the catch block below skips this entirely, matching the
+            // old gating ("don't build the panel against content that may not exist yet").
+            if (ActiveConversionPass == ResoniteSdkConversionPass.Full)
+                WriteLightTuningPanelInputAndLaunchBuilder();
+
             // Post processing
             foreach (var root in roots)
                 foreach (var postprocessor in root.GetComponentsInChildren<IConversionPostProcessor>())
@@ -503,7 +518,14 @@ public class SceneConverter : IConversionContext
             {
                 // Check if the target still exists
                 if (converter.Target == null)
+                {
+                    // This destroys the converter component alone (its GameObject survives), so
+                    // its Resonite-side wrapper component(s) won't be cleaned up by Unity's own
+                    // destroy cascade - Cleanup() needs to do that explicitly (see
+                    // ResoniteComponentConverter.cs's ExplicitCleanupRequested field comment).
+                    converter.ExplicitCleanupRequested = true;
                     UnityEngine.Object.DestroyImmediate(converter);
+                }
                 else
                     converterMap.Add(converter.Target, converter);
             }
@@ -1021,5 +1043,239 @@ public class SceneConverter : IConversionContext
         }
 
         list.Add(action);
+    }
+
+    // ------------------------------------------------------------------
+    // Light Tuning Panel input hand-off (2026-08-26)
+    // ------------------------------------------------------------------
+    //
+    // See the call site in Convert(IEnumerable<Transform>) for the full "why" (replaces the old
+    // LightTuningPanelBuilder.cs C#-side UIX/ProtoFlux construction, per Tanossy's direction to
+    // match the already-proven 2026-08-24 hand-built raw-JSON version instead of continuing to
+    // debug this SDK's typed component wrappers layer by layer). This half is deliberately tiny:
+    // gather each already-converted light's baseline data, write it to one JSON file, and launch
+    // scripts/build_light_tuning_panel.py (in the eldorado repo) to do the actual ResoniteLink
+    // work. Fire-and-forget - does not block this Editor's main thread waiting for the script.
+
+    // 2026-08-26: these use auto-PROPERTIES, not plain public fields, deliberately -
+    // System.Text.Json.JsonSerializer.Serialize(obj) with DEFAULT options (no explicit
+    // JsonSerializerOptions passed) only serializes public PROPERTIES, not public fields
+    // (IncludeFields defaults to false). The existing SendOperationBatch's debug-log call a few
+    // methods above this one only works with plain fields because it explicitly passes
+    // ResoniteLink.LinkInterface.SerializationOptions (which must set IncludeFields = true for
+    // that whole message-class hierarchy, all plain-field-based, to serialize at all) - rather
+    // than depend on that specific options object's exact configuration for this unrelated DTO,
+    // these are just properties so a bare Serialize(payload) call works correctly on its own.
+    [Serializable]
+    class LightTuningPanelInputLight
+    {
+        public string SlotId { get; set; }
+        public string Name { get; set; }
+        public float BaselineIntensity { get; set; }
+        public float[] BaselineColor { get; set; } // [r, g, b, a]
+
+        // World-space position of the *Unity* Transform (transform.position, not
+        // transform.localPosition) at send time - used only for placing the panel "near" the
+        // lights, not sent to Resonite as-is. Since every Unity scene root ends up parented
+        // under the "Unity Import" wrapper slot, which itself always sits at Resonite-world
+        // origin with an identity rotation/scale (see EnsureImportRootSlot), a light's Unity
+        // world position is a direct, unscaled stand-in for its eventual Resonite-world
+        // position - good enough for "roughly where the room is", which is all placement needs.
+        public float[] Position { get; set; } // [x, y, z]
+    }
+
+    [Serializable]
+    class LightTuningPanelInputPayload
+    {
+        public int Port { get; set; }
+        public List<LightTuningPanelInputLight> Lights { get; set; } = new List<LightTuningPanelInputLight>();
+    }
+
+    // Absolute path to the eldorado monorepo checkout that owns build_light_tuning_panel.py and
+    // this feature's wiki writeup - not part of this Unity project, so it can't be found via
+    // Application.dataPath. Matches the fixed path already used throughout that repo's own docs/
+    // scripts for this machine (see e.g. this file's own historical comments referencing
+    // C:/urd/wiki/... and C:/Repositories/eldorado/scripts/...).
+    const string EldoradoRepoRoot = @"c:/Repositories/eldorado";
+
+    void WriteLightTuningPanelInputAndLaunchBuilder()
+    {
+        try
+        {
+            var lights = UnityEngine.Object.FindObjectsOfType<LightConverter>()
+                .Where(c => c != null && c.Target != null && c.Binding != null && c.Binding.Data != null)
+                .ToList();
+
+            if (lights.Count == 0)
+            {
+                Debug.Log("[LightTuningPanel] No lights found in this scene - skipping build_light_tuning_panel.py.");
+                return;
+            }
+
+            var payload = new LightTuningPanelInputPayload { Port = _window.Port };
+
+            foreach (var lc in lights)
+            {
+                // Baseline values are read off the already-populated FrooxEngine.Light data
+                // (LightHelper.SetFrom already ran during UpdateComponentConversions, earlier in
+                // this same Convert() call, so these already include LightTuning.ApplyIntensity/
+                // ApplyColor - i.e. they match exactly what was just sent to Resonite for this
+                // light, not the raw pre-tuning Unity values).
+                var data = lc.Binding.Data;
+                var c = data.Color.color;
+
+                var pos = lc.transform.position;
+
+                payload.Lights.Add(new LightTuningPanelInputLight
+                {
+                    SlotId = GetTransformSlotId(lc.transform),
+                    Name = lc.Target.name,
+                    BaselineIntensity = data.Intensity,
+                    BaselineColor = new[] { c.r, c.g, c.b, c.a },
+                    Position = new[] { pos.x, pos.y, pos.z },
+                });
+            }
+
+            var projectDir = System.IO.Directory.GetParent(Application.dataPath).FullName;
+            var tempDir = System.IO.Path.Combine(projectDir, "Temp");
+            System.IO.Directory.CreateDirectory(tempDir);
+
+            var inputPath = System.IO.Path.Combine(tempDir, "light_tuning_panel_input.json");
+            var json = System.Text.Json.JsonSerializer.Serialize(payload);
+            System.IO.File.WriteAllText(inputPath, json);
+
+            var logPath = System.IO.Path.Combine(tempDir, "light_tuning_panel_result.txt");
+            LaunchLightTuningPanelBuilder(inputPath, logPath);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[LightTuningPanel] Failed to write input JSON / launch build script:\n{ex}");
+        }
+    }
+
+    // 2026-08-26 (per Tanossy's report of a texture-upload disconnect on two SEPARATE sessions/
+    // ports, and the coordinator's follow-up asking to rule out - rather than assume away -
+    // whether this fire-and-forget background process could still be contributing): reading
+    // SceneConverter.Convert()'s own code confirms this method can only ever run AFTER
+    // SendOperationBatch(messages) has already returned successfully (it's called after that line,
+    // inside the same try block - if SendOperationBatch throws, as it does when asset conversion
+    // fails, the catch block below skips this method entirely for that Convert() call). So this
+    // process cannot be running *during* the very asset upload that fails in the same Send Current
+    // Scene click. It CAN still be running in the background for the ~30-90s it normally takes
+    // (0.4s wait x ~18 round trips x 7 lights, plus network latency) *after* Convert() has already
+    // returned and the Editor is responsive again - if the user triggers another Resonite-related
+    // action (including a second Send Current Scene) inside that window, a second WebSocket client
+    // from an *earlier* successful send would legitimately still be talking to the *same* live
+    // session while a *new* send's asset upload is in flight. This lock file doesn't prove that
+    // scenario causes anything (the leading, evidence-backed explanation for the reported crash is
+    // a pre-existing, already-documented ResoniteLink.dll race condition - see AssetConversionManager
+    // .ProcessConversions' 2026-08-08 comment - colliding with an unusually large asset: skybox_
+    // stars_render.png is ~68MB, by far the largest texture in this scene, so it has by far the
+    // longest transfer window for that pre-existing bug to manifest in, regardless of this file).
+    // It simply closes off an entire class of "could this be an aggravating factor" doubt cheaply:
+    // never let two build_light_tuning_panel.py runs be in flight against the same machine at once.
+    static string LightTuningPanelLockPath(string tempDir) =>
+        System.IO.Path.Combine(tempDir, "light_tuning_panel.lock");
+
+    static void LaunchLightTuningPanelBuilder(string inputPath, string logPath)
+    {
+        var tempDir = System.IO.Path.GetDirectoryName(inputPath);
+        var lockPath = LightTuningPanelLockPath(tempDir);
+
+        if (System.IO.File.Exists(lockPath) &&
+            int.TryParse(System.IO.File.ReadAllText(lockPath).Trim(), out var previousPid) &&
+            IsProcessRunning(previousPid))
+        {
+            AppendLightTuningPanelLog(logPath,
+                $"Skipped launch: a previous build_light_tuning_panel.py run (pid={previousPid}) is " +
+                "still in progress. Not starting a second concurrent WebSocket client against the " +
+                "same session - wait for it to finish (see this file, Temp/light_tuning_panel_result.txt) " +
+                "before sending again.");
+            return;
+        }
+
+        var scriptPath = System.IO.Path.Combine(EldoradoRepoRoot, "scripts", "build_light_tuning_panel.py");
+
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "uv",
+            Arguments = $"run python \"{scriptPath}\" --input \"{inputPath}\"",
+            WorkingDirectory = EldoradoRepoRoot,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+
+        // Known Windows gotcha (already documented elsewhere in this project's own notes):
+        // Python's stdout defaults to the console's OEM code page (cp932 on this machine),
+        // which throws UnicodeEncodeError the moment anything non-ASCII gets printed. The
+        // script's own runtime log lines are plain ASCII today, but this is cheap, harmless
+        // insurance against that ever silently breaking a future edit to the script.
+        psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
+
+        var process = new System.Diagnostics.Process { StartInfo = psi, EnableRaisingEvents = true };
+
+        process.OutputDataReceived += (s, e) => { if (e.Data != null) AppendLightTuningPanelLog(logPath, "[out] " + e.Data); };
+        process.ErrorDataReceived += (s, e) => { if (e.Data != null) AppendLightTuningPanelLog(logPath, "[err] " + e.Data); };
+        process.Exited += (s, e) =>
+        {
+            AppendLightTuningPanelLog(logPath, $"[build_light_tuning_panel.py exited with code {process.ExitCode}]");
+
+            try
+            {
+                // Only clear the lock if it's still ours - a stale-PID cleanup elsewhere or a
+                // brand new run could in principle have already replaced it.
+                if (System.IO.File.Exists(lockPath) &&
+                    int.TryParse(System.IO.File.ReadAllText(lockPath).Trim(), out var lockedPid) &&
+                    lockedPid == process.Id)
+                    System.IO.File.Delete(lockPath);
+            }
+            catch
+            {
+                // Best-effort cleanup only - a leftover lock file just means the *next* launch
+                // attempt does one extra (harmless) IsProcessRunning() check that returns false.
+            }
+        };
+
+        process.Start();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        // Deliberately no WaitForExit() - fire-and-forget, matching Tanossy's explicit "don't
+        // block the Editor waiting for the process" instruction. Progress/errors land in
+        // Temp/light_tuning_panel_result.txt (via the handlers above) rather than in Unity's own
+        // Console, since this process is fully detached from Unity's own stdout.
+
+        System.IO.File.WriteAllText(lockPath, process.Id.ToString());
+
+        AppendLightTuningPanelLog(logPath,
+            $"Launched build_light_tuning_panel.py (input={inputPath}, pid={process.Id}).");
+    }
+
+    static bool IsProcessRunning(int pid)
+    {
+        try
+        {
+            using var p = System.Diagnostics.Process.GetProcessById(pid);
+            return !p.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            // No process with this id exists (already exited and the id was reused or is just gone).
+            return false;
+        }
+    }
+
+    static void AppendLightTuningPanelLog(string logPath, string line)
+    {
+        try
+        {
+            System.IO.File.AppendAllText(logPath, $"[{DateTime.Now:HH:mm:ss}] {line}\n");
+        }
+        catch
+        {
+            // Best-effort logging only - never let a logging failure take down the (already
+            // fire-and-forget, already-launched) build process or anything else in this class.
+        }
     }
 }

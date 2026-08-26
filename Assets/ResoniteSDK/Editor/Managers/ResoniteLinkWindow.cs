@@ -351,7 +351,14 @@ public class ResoniteLinkWindow : EditorWindow
 
         foreach (var root in roots)
             foreach (var converter in root.GetComponentsInChildren<ResoniteComponentConverter>())
+            {
+                // This destroys the converter component alone (its GameObject survives), so its
+                // Resonite-side wrapper component(s) won't be cleaned up by Unity's own destroy
+                // cascade - Cleanup() needs to do that explicitly (see
+                // ResoniteComponentConverter.cs's ExplicitCleanupRequested field comment).
+                converter.ExplicitCleanupRequested = true;
                 DestroyImmediate(converter);
+            }
     }
 
     public void CleanupReosniteComponents()

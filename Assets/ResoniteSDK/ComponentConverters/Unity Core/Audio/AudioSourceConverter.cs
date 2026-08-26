@@ -84,8 +84,14 @@ public class AudioSourceConverter : ResoniteComponentConverter<AudioSource>
         Player.Data.SetFrom(target, context);
     }
 
+    // 2026-08-27: guarded on ExplicitCleanupRequested (see ResoniteComponentConverter.cs) so
+    // this doesn't redundantly re-destroy Output/Player when the whole GameObject is already
+    // being torn down as a unit (e.g. Bakery's scene-setup restore during a bake).
     protected override void Cleanup()
     {
+        if (!ExplicitCleanupRequested)
+            return;
+
         if (Output != null)
             DestroyImmediate(Output);
 
