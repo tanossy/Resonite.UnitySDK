@@ -53,10 +53,14 @@ public static class LightTuning
     // this was also a contributing factor in the incident above, via a scene's dense
     // "AmbientLights" fill-light group, and is not solved here).
     //
-    // Starting value carried over from the previous fixed-multiplier tuning (bedroom scene's
-    // Point Lights: native ~0.5 * old multiplier 1.8 = 0.9). Not yet re-verified live against
-    // either scene under this new formula - Unity MCP was disconnected when this was written.
-    public static float IntensityCeiling = 0.9f;
+    // 0.9 (carried over from the previous fixed-multiplier tuning) was never re-verified live
+    // under this new self-normalizing formula, and turned out too dark overall (per Tanossy's
+    // feedback, 2026-08-28). Raised to 1.3 - a moderate bump kept well under 1.8, the value
+    // that previously caused blown-out specular reflections on TVs/metal/glass (see the
+    // 2026-08-08 addendum above) - but still not independently re-verified live in this
+    // session (Unity MCP was unavailable). Re-check against a real scene and adjust further
+    // if needed.
+    public static float IntensityCeiling = 1.3f;
 
     // 2026-08-08 through 2026-08-24: this file used to also carry a WhiteBalanceShift field +
     // ApplyColor() method that Lerp'd each light's color toward white at send time, tuned

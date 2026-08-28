@@ -293,7 +293,7 @@ public class LightmapPipelineWindow : EditorWindow
     // 2026-08-27 (per Tanossy's feedback: "white balance isn't needed"): removed
     // _lightWhiteBalanceShift and its slider along with LightTuning.WhiteBalanceShift itself
     // (see that file). Only the intensity knob remains below.
-    float _lightIntensityCeiling = 0.9f;
+    float _lightIntensityCeiling = 1.3f;
 
     const string SendTimeTuningHeaderJA = "送信時ライト調整";
     const string SendTimeTuningHeaderEN = "Send-Time Light Tuning";
@@ -772,7 +772,7 @@ public class LightmapPipelineWindow : EditorWindow
     // Default the "Reset to Defaults" button below restores - kept as a named constant (rather
     // than repeating the field initializer's literal inline at the button call site) so the
     // two stay in sync if the default is ever re-tuned again.
-    const float DefaultLightIntensityCeiling = 0.9f;
+    const float DefaultLightIntensityCeiling = 1.3f;
 
     void DrawSendTimeLightTuningSection(bool baking)
     {
