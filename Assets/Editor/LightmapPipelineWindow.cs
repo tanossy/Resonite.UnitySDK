@@ -3,7 +3,7 @@
 // ライトマップパイプライン操作パネル。「品質プリセット選択→ベイク→自動送信」を
 // ワンボタン化する便利UI。
 //
-// メニュー: "Resonite SDK/Lightmap Bake & Send"
+// メニュー: "Resonite SDK/Lightmap Baker"
 //
 // これは意図的に薄いUI層である。ベイク/変換のロジックは一切ここに置かず、すべて
 // LightmapTestHarness.cs 側の public static メソッド/プロパティを呼ぶだけに徹する
@@ -34,10 +34,10 @@
 //                          し撤去済み）。
 //                          DrawSendTimeLightTuningSection()参照。
 //   [Convert Lights]   -> Baker==Bakery のときだけ表示（Unity Standard時は非表示）
-//   [Bake] [Bake & Send] の1列のみ
+//   [Bake] のみ（送信は本家Resonite SDK Managerパネルの Send Current Scene 側に一本化）
 //   Debug / Cleanup    -> どちらのBakerでも常時表示。2026-08-26、ResoniteSDKDebugWindow.cs
 //                          （メニュー "Resonite SDK/Open Debug Tools"）を統廃合してここへ移設
-//                          （Tanossy指摘: "Lightmap Bake & SendとDebug toolが冗長すぎる。まとめて"）。
+//                          （Tanossy指摘: "Lightmap BakerとDebug toolが冗長すぎる。まとめて"）。
 //                          Send Meshes/Materials/Lightmaps Only（部分送信）・Retry Missing
 //                          Asset URLs・Log Messages JSONの4点。「Cleanup converters in the
 //                          scene」「Cleanup Resonite Components in the scene」に加え、
@@ -66,10 +66,10 @@
 //                   （ベイカー選択に応じてどちらか一方。auto-convertなし。どちらも
 //                   useCurrentSceneInsteadOfTestRoom引数に「対象シーン」選択を渡す
 //                   — RunBakeOnly()参照）
-//   Bake & Send  -> 同様にApplyTuningToScene(sun)を先に適用 ->
-//                   LightmapTestHarness.RunPipeline(quality, baker, bakeNormalDetail, useCurrentScene)
-//                   （ベイク完了イベントで自動convertまで実行。harness既存のpipelineチェーン
-//                   をそのまま使う — 独自のbakeCompleted購読はここでは持たない）
+//   （2026-08-27: Bake & Sendボタンは撤去。送信は本家Resonite SDK Managerパネルの
+//   Send Current Scene に一本化——ここに重複した送信ボタンを持つのは冗長との判断。
+//   LightmapTestHarness.RunPipeline()自体は削除していない
+//   ——外部プロセスからのファイルコマンド駆動（"pipeline"コマンド）で今も使われている）
 //
 // --- ツールチップ（ダイダロス追加分）-------------------------------------------------
 // 全コントロールを GUIContent(label, tooltip) 化してホバー説明を出す。文言は Tooltip*
@@ -86,10 +86,10 @@
 // ⚠ 現状の実装範囲（できる範囲／できない範囲を明記・2026-07-11 Step1+2実装後に更新）:
 //   - できる範囲（実装済み）:
 //     ・チェック状態の保持＋OFF→ON確認ダイアログ＋説明表示（本ファイル内で完結）。
-//     ・Step 1: 委譲値が RunBakeOnly()/RunBakeAndSend() から
-//       LightmapTestHarness.StartBakeUnity(..., bakeNormalDetail) / RunPipeline(..., bool) に
-//       配線済み。ONのとき LightingSettings.directionalityMode = LightmapsMode.
-//       CombinedDirectional（OFFのときは明示的に NonDirectional）でベイクされる。
+//     ・Step 1: 委譲値が RunBakeOnly() から
+//       LightmapTestHarness.StartBakeUnity(..., bakeNormalDetail) に配線済み。ONのとき
+//       LightingSettings.directionalityMode = LightmapsMode.CombinedDirectional
+//       （OFFのときは明示的に NonDirectional）でベイクされる。
 //     ・Step 2: SDKフォーク側（Resonite.UnitySDK の LightmapMaterialCache /
 //       DirectionalLightmapBaker、Assets/ResoniteSDK/ComponentConverters/Unity Core/
 //       Rendering/ 配下）が、変換時に LightmapData.lightmapDir が非nullのレンダラーを検出
@@ -210,9 +210,6 @@ public class LightmapPipelineWindow : EditorWindow
 
     const string TooltipBakeJA = "調整値をシーンに適用してからUnityでベイク（Resoniteには送らない）";
     const string TooltipBakeEN = "Apply the tuning values to the scene, then bake in Unity (does not send to Resonite).";
-
-    const string TooltipBakeAndSendJA = "ベイク後、接続中のResoniteへ自動送信";
-    const string TooltipBakeAndSendEN = "Bake, then automatically send to the connected Resonite session.";
 
     const string TooltipConvertLightsJA = "UnityライトをBakery用ライトに変換（Bakery経路専用）";
     const string TooltipConvertLightsEN = "Convert Unity lights to Bakery lights (Bakery path only).";
@@ -405,10 +402,10 @@ public class LightmapPipelineWindow : EditorWindow
     // Cached via reflection the first time it's needed; see GetRenderSettingsObjectForUndo().
     static MethodInfo _getRenderSettingsMethod;
 
-    [MenuItem("Resonite SDK/Lightmap Bake & Send")]
+    [MenuItem("Resonite SDK/Lightmap Baker")]
     static void ShowWindow()
     {
-        var window = GetWindow<LightmapPipelineWindow>("Lightmap Bake & Send");
+        var window = GetWindow<LightmapPipelineWindow>("Lightmap Baker");
         window.minSize = new Vector2(360f, 420f);
     }
 
@@ -532,9 +529,9 @@ public class LightmapPipelineWindow : EditorWindow
         }
 
         // Only meaningful for the Unity standard baker (see the field-block comment above
-        // Lighting section state) — sun stays null for Bakery, and RunBakeOnly()/
-        // RunBakeAndSend() below only ever call ApplyTuningToScene(sun) when
-        // _baker == LightBaker.UnityStandard, so a null sun here never matters for Bakery.
+        // Lighting section state) — sun stays null for Bakery, and RunBakeOnly() below only
+        // ever calls ApplyTuningToScene(sun) when _baker == LightBaker.UnityStandard, so a
+        // null sun here never matters for Bakery.
         Light sun = null;
         if (_baker == LightBaker.UnityStandard)
         {
@@ -569,9 +566,6 @@ public class LightmapPipelineWindow : EditorWindow
         GUI.enabled = !baking;
         if (GUILayout.Button(new GUIContent(L("ベイク", "Bake"), L(TooltipBakeJA, TooltipBakeEN))))
             RunBakeOnly(sun);
-
-        if (GUILayout.Button(new GUIContent(L("ベイク＆送信", "Bake & Send"), L(TooltipBakeAndSendJA, TooltipBakeAndSendEN))))
-            RunBakeAndSend(sun);
 
         EditorGUILayout.EndHorizontal();
 
@@ -682,8 +676,8 @@ public class LightmapPipelineWindow : EditorWindow
     // Lighting section (Unity standard baker only) — see the header comment block for the
     // full knob mapping table. Only ever called from OnGUI() when _baker ==
     // LightBaker.UnityStandard. Draws the 5 knobs + the experimental normal-bake checkbox;
-    // no separate "Apply" button here — "Bake"/"Bake & Send" below apply these values via
-    // ApplyTuningToScene(sun) as their own first step (see RunBakeOnly()/RunBakeAndSend()).
+    // no separate "Apply" button here — "Bake" below applies these values via
+    // ApplyTuningToScene(sun) as its own first step (see RunBakeOnly()).
     // ------------------------------------------------------------------
 
     Light DrawLightingSection(bool baking)
@@ -771,8 +765,8 @@ public class LightmapPipelineWindow : EditorWindow
     // _lightIntensityCeiling) for why this is drawn unconditionally (both bakers) rather than
     // only for LightBaker.UnityStandard like DrawLightingSection(). No "Apply" button here
     // either — the value is synced straight into LightTuning's static field on every OnGUI
-    // call, so it takes effect on whatever the next Send Current Scene/Bake & Send actually
-    // does, without needing a scene edit first.
+    // call, so it takes effect on the next Send Current Scene, without needing a scene edit
+    // first.
     // ------------------------------------------------------------------
 
     // Default the "Reset to Defaults" button below restores - kept as a named constant (rather
@@ -878,9 +872,9 @@ public class LightmapPipelineWindow : EditorWindow
     // "できる範囲／できない範囲" note for exactly what this control does and does not do.
     // Interactive (not GUI.enabled=false) because an OFF->ON transition must be able to
     // trigger the confirmation dialog below. As of the Step 1/2 wiring, this *committed* bool
-    // value IS read: RunBakeOnly()/RunBakeAndSend() pass it straight through to
-    // LightmapTestHarness.StartBakeUnity(..., bakeNormalDetail)/RunPipeline(..., bool), which
-    // sets LightingSettings.directionalityMode accordingly — flipping it now changes the next
+    // value IS read: RunBakeOnly() passes it straight through to
+    // LightmapTestHarness.StartBakeUnity(..., bakeNormalDetail), which sets
+    // LightingSettings.directionalityMode accordingly — flipping it now changes the next
     // bake's directional-lightmap mode (and, transitively, whether the SDK fork's
     // DirectionalLightmapBaker path activates at conversion time; see that class).
     void DrawNormalBakeToggle()
@@ -938,7 +932,7 @@ public class LightmapPipelineWindow : EditorWindow
     // Applies the 5 tuning knobs to the scene. `sun` may be null (no directional light in
     // the open scene) — in that case only the ambient knobs are applied, matching
     // DrawLightingSection()'s graying-out of the sun-only controls. Only ever called (from
-    // RunBakeOnly()/RunBakeAndSend()) when _baker == LightBaker.UnityStandard.
+    // RunBakeOnly()) when _baker == LightBaker.UnityStandard.
     void ApplyTuningToScene(Light sun)
     {
         if (sun != null)
@@ -1052,22 +1046,4 @@ public class LightmapPipelineWindow : EditorWindow
         }
     }
 
-    // Same tuning-apply step as RunBakeOnly() above, then hands off to
-    // LightmapTestHarness.RunPipeline(...) exactly as before — that already chains into
-    // Convert() once the bake completes (via the harness's own OnBakeFinished/
-    // OnUnityBakeFinished + _pipelineChainConvert flag) for BOTH backends, so no separate
-    // bakeCompleted subscription is needed on this window's side.
-    void RunBakeAndSend(Light sun)
-    {
-        var quality = ResolveQuality();
-        // See the matching comment in RunBakeOnly() above.
-        bool useCurrentScene = _sceneTarget == SceneTarget.CurrentOpenScene;
-
-        if (_baker == LightBaker.UnityStandard)
-            ApplyTuningToScene(sun);
-
-        // _bakeNormalDetail is only meaningful for _baker == LightBaker.UnityStandard (see
-        // RunPipeline()'s own header comment) - harmlessly ignored by the harness for Bakery.
-        LightmapTestHarness.RunPipeline(quality, _baker, _bakeNormalDetail, useCurrentScene);
-    }
 }

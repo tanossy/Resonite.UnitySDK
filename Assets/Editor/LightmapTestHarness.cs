@@ -24,7 +24,7 @@
 //   - BakeryTempObjectSuppression.cs : "!ftraceLightmaps"(ftLightmapsStorage) をSDKの正規
 //     ConversionSupressionHandler機構でシーン変換から除外する追加コンバータ。
 //   - LightmapPipelineWindow.cs      : 本ファイルの static メソッドを呼ぶだけの薄いGUI層
-//     （メニュー "Resonite SDK/Lightmap Bake & Send"）。ロジックは全て本ファイル側に集約。
+//     （メニュー "Resonite SDK/Lightmap Baker"）。ロジックは全て本ファイル側に集約。
 //
 // 参照 API の実在確認元（推測禁止・すべて実ソースを読んで確認済み）:
 //   - Bakery: Assets/Editor/x64/Bakery/scripts/ftRenderLightmap.cs
@@ -1698,7 +1698,7 @@ public static class LightmapTestHarness
         InvokeConnectedSdkSend("SendLightmapsOnly", "Convert Lightmaps Only");
     }
 
-    // 2026-08-26 (per Tanossy's feedback: "Lightmap Bake & Send and Debug Tools are too
+    // 2026-08-26 (per Tanossy's feedback: "Lightmap Baker and Debug Tools are too
     // redundant, consolidate them" - ResoniteSDKDebugWindow.cs removed, its buttons folded
     // into LightmapPipelineWindow.cs's new "Debug / Cleanup" section): same
     // InvokeConnectedSdkSend() wrapper pattern as ConvertMeshesOnly()/ConvertMaterialsOnly()/
@@ -1744,7 +1744,7 @@ public static class LightmapTestHarness
     // above): deleted the wrapper that used to live here. LightmapMaterialCache
     // .ClearGeneratedLightmapVariants() itself is unchanged and still runs - just no longer
     // from a manual button. SceneConverter.ConvertScene() already calls it automatically
-    // whenever the "Force Refresh Generated Lightmaps" toggle (Lightmap Bake & Send's Send-Time
+    // whenever the "Force Refresh Generated Lightmaps" toggle (Lightmap Baker's Send-Time
     // Options section) is on, which is the one-click, discoverable equivalent: check it before
     // your next send instead of hunting for a separate debug button.
 

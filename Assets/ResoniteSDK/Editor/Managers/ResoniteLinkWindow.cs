@@ -150,7 +150,7 @@ public class ResoniteLinkWindow : EditorWindow
 
         // 2026-08-18: "Force Refresh Generated Lightmaps" and "Send Tonemap Compensation
         // (experimental)" (both overlay additions, not part of vanilla Resonite.UnitySDK — unlike
-        // Convert Skybox above, which is upstream) moved to the Lightmap Bake & Send panel's
+        // Convert Skybox above, which is upstream) moved to the Lightmap Baker panel's
         // "Send-Time Options" section (see LightmapPipelineWindow.cs's DrawSendTimeOptionsSection())
         // per Tanossy's feedback to keep this official-looking panel limited to what's actually
         // original. Their backing state (ConversionPassState.ForceRefreshGeneratedLightmaps /
@@ -183,7 +183,7 @@ public class ResoniteLinkWindow : EditorWindow
         //
         // 2026-08-26 update: they first landed in a standalone ResoniteSDKDebugWindow.cs (menu:
         // Resonite SDK/Open Debug Tools), but that window was found to be redundant with
-        // LightmapPipelineWindow.cs (menu: Resonite SDK/Lightmap Bake & Send) and has since been
+        // LightmapPipelineWindow.cs (menu: Resonite SDK/Lightmap Baker) and has since been
         // deleted - its remaining buttons now live in that window's "Debug / Cleanup" section
         // instead (called via LightmapTestHarness.cs's RetryMissingAssetURLs()/LogMessageJSON,
         // same as its other sections). This window's own public passthrough methods below
