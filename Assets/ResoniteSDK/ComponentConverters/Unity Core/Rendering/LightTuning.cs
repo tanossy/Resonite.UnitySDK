@@ -68,7 +68,34 @@ public static class LightTuning
     // both directions. Removed entirely on 2026-08-27 (per Tanossy's feedback: "white balance
     // isn't needed") - light color now passes straight through unchanged in LightConverter.cs,
     // same as before 2026-08-08. Only ApplyIntensity/IntensityCeiling remain below.
-    public static float ApplyIntensity(float unityIntensity) => unityIntensity * GetEffectiveIntensityMultiplier();
+
+    // 2026-08-29 (per a report from another Resonite user working on the same lightbake-import
+    // problem, based on what they actually observed live): Resonite's light Color is Linear
+    // (matches this project's own Linear color space, m_ActiveColorSpace: 1), but light
+    // Intensity is interpreted in Gamma space - unlike color, which Unity/Resonite both treat
+    // consistently, an Intensity value sent straight through gets gamma-decoded (~x^2.2) by
+    // Resonite on arrival, landing noticeably darker than intended. Pre-correcting with the
+    // inverse (x^(1/2.2)) before sending should cancel that back out, the same way sRGB
+    // textures are gamma-encoded before storage so a display's own decode recovers the
+    // original linear value.
+    //
+    // This changes what IntensityCeiling itself means: it used to be "the raw value sent for
+    // the scene's brightest light," now it's "the linear brightness we actually want that
+    // light to look like in Resonite, before gamma pre-correction is applied on top." The
+    // current 1.3 value was tuned for the OLD meaning (see the comment above) and has not been
+    // re-verified live under this new correction - expect to need a fresh number once this is
+    // checked against a running Resonite session.
+    public static float ApplyIntensity(float unityIntensity)
+    {
+        float desiredLinearIntensity = unityIntensity * GetEffectiveIntensityMultiplier();
+
+        return Mathf.Pow(desiredLinearIntensity, 1f / GammaExponent);
+    }
+
+    // Standard display gamma. Not currently exposed as a tunable - if 2.2 turns out to not
+    // match Resonite's actual decode curve once this is checked live, this is the value to
+    // adjust.
+    const float GammaExponent = 2.2f;
 
     // Recomputed from the live scene on every call rather than cached: this only ever runs
     // during an Editor-time scene conversion (never per-frame/runtime), so even a few hundred
