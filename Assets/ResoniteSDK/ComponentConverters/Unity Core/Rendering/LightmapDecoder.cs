@@ -232,7 +232,7 @@ public static class LightmapDecoder
         // and stays stable across Editor sessions/domain reloads for an unchanged bake. We record
         // it in the decoded PNG's own TextureImporter.userData so a later call can tell whether
         // it needs to re-decode or can just hand back the existing asset.
-        var sourceHash = $"{sourceLightmap.imageContentsHash}|range:{RangeScale:0.########}|max:{MaxPreviewTextureSize}|gray:{desaturate}|sat:{ColorSaturationCompensation:0.###}|hdr:{HdrExport}|hdrmax:{HdrMaxTextureSize}|redilate:{OwnershipRedilateRadius}";
+        var sourceHash = $"{sourceLightmap.imageContentsHash}|range:{RangeScale:0.########}|max:{MaxPreviewTextureSize}|gray:{desaturate}|sat:{ColorSaturationCompensation:0.###}|hdr:{HdrExport}|hdrmax:{HdrMaxTextureSize}|redilate:{OwnershipRedilateRadius}|underY:{UnderHeightRefillY:0.###}/{UnderHeightRefillSourceY:0.###}";
 
         // Memory front-cache lookup first. `cached != null` uses Unity's overloaded null check,
         // so a destroyed/unloaded Texture2D (e.g. after an AssetDatabase.DeleteAsset elsewhere, or
@@ -405,6 +405,15 @@ public static class LightmapDecoder
         // 2026-08-31: re-dilate the atlas by UV2 OWNERSHIP before any downscale - see the
         // method's comment for the measured failure this fixes (bright band along the wall/
         // floor edge that the send-time gain turned pure white).
+        // 2026-08-31: overwrite the sky-lit under-floor wall sliver with the visible wall's
+        // colour (RefillBelowHeight), THEN re-dilate the gutter by ownership so the gutter
+        // around every island carries the island's own (now corrected) edge colour instead of
+        // Bakery's dilation of the bright sliver. Order matters: measured with refill alone,
+        // the un-owned gutter rows kept the baked-in bright dilation (1.3 after RangeScale)
+        // and the downscale still mixed them into the wall base.
+        if (UnderHeightRefillY > 0f)
+            RefillBelowHeight(pixels, width, height, source);
+
         if (OwnershipRedilateRadius > 0)
             RedilateByOwnership(pixels, width, height, source);
 
@@ -619,12 +628,12 @@ public static class LightmapDecoder
     // downscale with margin). Foreign dilation Bakery wrote into the gutter is overwritten;
     // texels actually covered by triangles are never modified. Runs on the raw decoded atlas
     // before RangeScale/downscale, on both the HDR and PNG paths.
-    // 2026-08-31 outcome: measured against the real bake, the white band was NOT foreign
-    // dilation - the bright rows are owned by the wall itself (its under-floor sliver, sky-lit
-    // from below), so this pass cannot remove it. It does exactly what it says (2.9M gutter
-    // texels rewritten with nearest-owner colour) but its visual effect has not been checked
-    // live, so it stays OFF (0) until it is. Set >0 to enable.
-    public static int OwnershipRedilateRadius = 0;
+    // 2026-08-31 outcome: alone this could not remove the band (the bright rows are owned by
+    // the wall's under-floor sliver), but combined with RefillBelowHeight - which rewrites
+    // those owned rows first - this pass then replaces Bakery's bright dilation in the gutter
+    // with the corrected island edge colour. Runs AFTER the refill; 24 covers the 4x send
+    // downscale + bilinear reach (16) plus the stray Bakery dilation measured just beyond it.
+    public static int OwnershipRedilateRadius = 24;
 
     static void RedilateByOwnership(Color[] pixels, int width, int height, Texture2D sourceLightmap)
     {
@@ -704,6 +713,163 @@ public static class LightmapDecoder
 
         Debug.Log($"[ResoniteSDK] LightmapDecoder: ownership re-dilation of \"{sourceLightmap.name}\": {rendererId} renderer(s) rasterised, " +
             $"{rewritten} gutter texel(s) rewritten within {radius} texels of their nearest island.");
+    }
+
+    // 2026-08-31 (the fix that finally kills the white band at the wall base, keeping the
+    // approved full-sky look): the 0.11 m of wall hidden UNDER the floor slab (wall bottom
+    // y=0.04, slab y=0.15-0.20) is sky-lit from below through the open underside of the room,
+    // so its lightmap rows are ~0.5 while the visible wall just above is ~0.03. Those rows are
+    // OWNED by the wall (RedilateByOwnership can't touch them), and the 4x downscale + bilinear
+    // mixes them into the wall-base texel, which the send-time gain turns pure white.
+    // (An alternative - BakerySkyLight.hemispherical=true - removes the cause in the bake, but
+    // shifts the whole room's light distribution away from the look Tanossy approved, and the
+    // view-level recalibration never converged. Not adopted.)
+    //
+    // RefillBelowHeight rasterises every renderer's UV2 triangles with interpolated world-space
+    // height, then rewrites every texel whose surface point lies below UnderHeightRefillY with
+    // the colour of the nearest texel OF THE SAME RENDERER at or above UnderHeightRefillSourceY
+    // (BFS within the island, so no neighbour's colour can leak in). Runs on the raw decoded
+    // atlas before the downscale. A scene with nothing below the threshold is untouched.
+    /// <summary>Texels whose surface sits below this world Y are refilled. 0 disables.</summary>
+    public static float UnderHeightRefillY = 0.19f;
+    /// <summary>Replacement colours are taken from texels at or above this world Y.</summary>
+    public static float UnderHeightRefillSourceY = 0.30f;
+
+    static void RefillBelowHeight(Color[] pixels, int width, int height, Texture2D sourceLightmap)
+    {
+        int lightmapIndex = -1;
+        var maps = LightmapSettings.lightmaps;
+        for (int i = 0; i < maps.Length; i++)
+            if (maps[i].lightmapColor == sourceLightmap) { lightmapIndex = i; break; }
+
+        if (lightmapIndex < 0)
+            return;
+
+        int n = width * height;
+        var owner = new int[n];
+        var worldY = new float[n];
+        int rendererId = 0;
+
+        foreach (var r in UnityEngine.Object.FindObjectsOfType<MeshRenderer>())
+        {
+            if (r == null || r.lightmapIndex != lightmapIndex) continue;
+            var mf = r.GetComponent<MeshFilter>();
+            var mesh = mf != null ? mf.sharedMesh : null;
+            if (mesh == null) continue;
+            var uv2 = mesh.uv2;
+            if (uv2 == null || uv2.Length != mesh.vertexCount) continue;
+
+            rendererId++;
+            var so = r.lightmapScaleOffset;
+            var verts = mesh.vertices;
+            var transform = r.transform;
+
+            for (int s = 0; s < mesh.subMeshCount; s++)
+            {
+                var tris = mesh.GetTriangles(s);
+                for (int t = 0; t + 2 < tris.Length; t += 3)
+                {
+                    Vector2 a = ToTexel(uv2[tris[t]], so, width, height);
+                    Vector2 b = ToTexel(uv2[tris[t + 1]], so, width, height);
+                    Vector2 c = ToTexel(uv2[tris[t + 2]], so, width, height);
+                    float ya = transform.TransformPoint(verts[tris[t]]).y;
+                    float yb = transform.TransformPoint(verts[tris[t + 1]]).y;
+                    float yc = transform.TransformPoint(verts[tris[t + 2]]).y;
+                    RasterizeTriangleHeight(owner, worldY, width, height, a, b, c, ya, yb, yc, rendererId);
+                }
+            }
+        }
+
+        if (rendererId == 0)
+            return;
+
+        // BFS from every texel at/above the source height into its own island; rewrite only
+        // texels below the refill height. Colours are carried from the ORIGINAL seed texel.
+        var queue = new Queue<int>();
+        var from = new int[n];
+        var dist = new byte[n];
+        var visited = new bool[n];
+        for (int i = 0; i < n; i++)
+        {
+            from[i] = -1;
+            if (owner[i] != 0 && worldY[i] >= UnderHeightRefillSourceY)
+            {
+                visited[i] = true;
+                from[i] = i;
+                queue.Enqueue(i);
+            }
+        }
+
+        const int radius = 64;
+        int rewritten = 0;
+
+        while (queue.Count > 0)
+        {
+            int i = queue.Dequeue();
+            int d = dist[i];
+            if (d >= radius) continue;
+            int x = i % width, y = i / width;
+
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                int ny = y + dy; if (ny < 0 || ny >= height) continue;
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    if (dx == 0 && dy == 0) continue;
+                    int nx = x + dx; if (nx < 0 || nx >= width) continue;
+                    int j = ny * width + nx;
+                    if (visited[j] || owner[j] != owner[i]) continue;
+                    visited[j] = true;
+                    from[j] = from[i];
+                    dist[j] = (byte)(d + 1);
+                    if (worldY[j] < UnderHeightRefillY)
+                    {
+                        pixels[j] = pixels[from[j]];
+                        rewritten++;
+                    }
+                    queue.Enqueue(j);
+                }
+            }
+        }
+
+        Debug.Log($"[ResoniteSDK] LightmapDecoder: under-height refill of \"{sourceLightmap.name}\": " +
+            $"{rewritten} texel(s) below y={UnderHeightRefillY:0.###} rewritten from their island's y>={UnderHeightRefillSourceY:0.###} colour.");
+    }
+
+    /// <summary>RasterizeTriangle plus barycentric world-height interpolation per texel.</summary>
+    static void RasterizeTriangleHeight(int[] owner, float[] worldY, int width, int height,
+        Vector2 a, Vector2 b, Vector2 c, float ya, float yb, float yc, int id)
+    {
+        int minX = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(a.x, Mathf.Min(b.x, c.x))) - 1);
+        int maxX = Mathf.Min(width - 1, Mathf.CeilToInt(Mathf.Max(a.x, Mathf.Max(b.x, c.x))) + 1);
+        int minY = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(a.y, Mathf.Min(b.y, c.y))) - 1);
+        int maxY = Mathf.Min(height - 1, Mathf.CeilToInt(Mathf.Max(a.y, Mathf.Max(b.y, c.y))) + 1);
+        if (minX > maxX || minY > maxY) return;
+
+        float area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        if (Mathf.Abs(area) < 1e-6f) return;
+        float inv = 1f / area;
+        const float pad = 0.5f;
+        float l0 = Vector2.Distance(a, b), l1 = Vector2.Distance(b, c), l2 = Vector2.Distance(c, a);
+        float tol0 = pad * l0 / Mathf.Abs(area), tol1 = pad * l1 / Mathf.Abs(area), tol2 = pad * l2 / Mathf.Abs(area);
+
+        for (int y = minY; y <= maxY; y++)
+        {
+            float py = y + 0.5f;
+            for (int x = minX; x <= maxX; x++)
+            {
+                float px = x + 0.5f;
+                float e0 = ((b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x)) * inv; // weight of c
+                float e1 = ((c.x - b.x) * (py - b.y) - (c.y - b.y) * (px - b.x)) * inv; // weight of a
+                float e2 = ((a.x - c.x) * (py - c.y) - (a.y - c.y) * (px - c.x)) * inv; // weight of b
+                if (e0 >= -tol0 && e1 >= -tol1 && e2 >= -tol2)
+                {
+                    int i = y * width + x;
+                    owner[i] = id;
+                    worldY[i] = e1 * ya + e2 * yb + e0 * yc;
+                }
+            }
+        }
     }
 
     static Vector2 ToTexel(Vector2 uv, Vector4 so, int width, int height)
