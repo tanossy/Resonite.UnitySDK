@@ -938,6 +938,10 @@ public static class LightmapTestHarness
         // "skip ... already present" for anything build_scene already converted.
         ConvertUnityLightsToBakeryLights();
 
+        // 2026-08-30: raise UV2 island padding to the target gutter BEFORE Bakery reads the
+        // scene (see LightmapPaddingPolicy.cs — fixes the bright lines along wall corners).
+        LightmapPaddingPolicy.Apply(texelsPerUnit, AppendResult);
+
         // ftRenderLightmap.RenderLightmap() is the public entry point used by the
         // "Bakery/Render lightmap..." menu item; it creates/shows the EditorWindow and
         // assigns the static `instance` field. See ftRenderLightmap.cs line ~13246.
@@ -1102,6 +1106,10 @@ public static class LightmapTestHarness
 
         _lastBaker = LightBaker.UnityStandard;
         _lastUsedCurrentScene = useCurrentSceneInsteadOfTestRoom;
+
+        // 2026-08-30: same UV2 padding policy as the Bakery path (LightmapPaddingPolicy.cs);
+        // Unity's lightmapResolution is its texels-per-unit.
+        LightmapPaddingPolicy.Apply(lightmapResolution, AppendResult);
 
         var settings = AssetDatabase.LoadAssetAtPath<LightingSettings>(UnityLightingSettingsAssetPath);
         bool isNewAsset = settings == null;
@@ -1297,6 +1305,8 @@ public static class LightmapTestHarness
         _bakeStartedByHarness = false;
         AppendResult("bake completed");
         Report();
+        // 2026-08-30: measure island gutters / edge bleed on the fresh bake (LightmapSeamAudit.cs).
+        LightmapSeamAudit.RunAndLog(AppendResult);
         MaybeContinuePipeline();
     }
 
@@ -1311,6 +1321,8 @@ public static class LightmapTestHarness
         _unityBakeStartedByHarness = false;
         AppendResult("unity bake completed");
         Report();
+        // 2026-08-30: same post-bake seam audit as the Bakery path.
+        LightmapSeamAudit.RunAndLog(AppendResult);
         MaybeContinuePipeline();
     }
 
