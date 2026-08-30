@@ -232,7 +232,7 @@ public static class LightmapDecoder
         // and stays stable across Editor sessions/domain reloads for an unchanged bake. We record
         // it in the decoded PNG's own TextureImporter.userData so a later call can tell whether
         // it needs to re-decode or can just hand back the existing asset.
-        var sourceHash = $"{sourceLightmap.imageContentsHash}|range:{RangeScale:0.########}|max:{MaxPreviewTextureSize}|gray:{desaturate}|sat:{ColorSaturationCompensation:0.###}|hdr:{HdrExport}|hdrmax:{HdrMaxTextureSize}|redilate:{OwnershipRedilateRadius}|underY:{UnderHeightRefillY:0.###}/{UnderHeightRefillSourceY:0.###}";
+        var sourceHash = $"{sourceLightmap.imageContentsHash}|range:{RangeScale:0.########}|max:{MaxPreviewTextureSize}|gray:{desaturate}|sat:{ColorSaturationCompensation:0.###}|hdr:{HdrExport}|hdrmax:{HdrMaxTextureSize}|redilate:{OwnershipRedilateRadius}|underY:{UnderHeightRefillY:0.###}/{UnderHeightRefillSourceY:0.###}|shell:{ShellLateralShrink:0.###}";
 
         // Memory front-cache lookup first. `cached != null` uses Unity's overloaded null check,
         // so a destroyed/unloaded Texture2D (e.g. after an AssetDatabase.DeleteAsset elsewhere, or
@@ -740,6 +740,19 @@ public static class LightmapDecoder
     /// <summary>Replacement colours are taken from texels at or above this world Y.</summary>
     public static float UnderHeightRefillSourceY = 0.30f;
 
+    // 2026-08-31, corner follow-up ("光の帯がなくなるまでテストして"): the vertical line at
+    // wall-wall corners is the same mechanism sideways. Diagnosis on the raw 4096 atlas: the
+    // room-shell mesh's OUTWARD faces (normals +-x/+-z, ~700k texels at 0.5 raw, sky-lit) sit
+    // in islands only ~5 texels from the inner-face islands, so nearest-wins re-dilation gives
+    // the far half of that gutter the outer face's brightness and the downscale still mixes it
+    // into the inner edge. Fix: for SHELL renderers (bounds contain the scene centroid and are
+    // room-sized), texels whose world XZ lies outside the bounds shrunk by ShellLateralShrink
+    // are treated as hidden (outer surface / corner sliver) and refilled like the under-floor
+    // sliver. 0.15 m keeps the inner faces (one wall thickness ~0.31 m inside the outer AABB)
+    // untouched. Ceiling / floor slabs and furniture never contain the centroid, so only the
+    // wall shell is affected. Set to 0 to disable the lateral rule.
+    public static float ShellLateralShrink = 0.15f;
+
     static void RefillBelowHeight(Color[] pixels, int width, int height, Texture2D sourceLightmap)
     {
         int lightmapIndex = -1;
@@ -752,12 +765,25 @@ public static class LightmapDecoder
 
         int n = width * height;
         var owner = new int[n];
-        var worldY = new float[n];
+        var worldPos = new Vector3[n];
         int rendererId = 0;
 
+        // Scene centroid (average of lightmapped renderer bounds centres) decides which
+        // renderers count as the room SHELL for the lateral rule.
+        var renderers = new List<MeshRenderer>();
+        var centroid = Vector3.zero;
+        int centroidCount = 0;
         foreach (var r in UnityEngine.Object.FindObjectsOfType<MeshRenderer>())
         {
-            if (r == null || r.lightmapIndex != lightmapIndex) continue;
+            if (r == null || r.lightmapIndex < 0) continue;
+            centroid += r.bounds.center; centroidCount++;
+            if (r.lightmapIndex == lightmapIndex) renderers.Add(r);
+        }
+        if (centroidCount > 0) centroid /= centroidCount;
+
+        var shellByRenderer = new Dictionary<int, Bounds>(); // rendererId -> LATERALLY shrunk bounds
+        foreach (var r in renderers)
+        {
             var mf = r.GetComponent<MeshFilter>();
             var mesh = mf != null ? mf.sharedMesh : null;
             if (mesh == null) continue;
@@ -765,6 +791,14 @@ public static class LightmapDecoder
             if (uv2 == null || uv2.Length != mesh.vertexCount) continue;
 
             rendererId++;
+
+            if (ShellLateralShrink > 0f && r.bounds.Contains(centroid) && r.bounds.size.magnitude > 8f)
+            {
+                var sb2 = r.bounds;
+                sb2.Expand(new Vector3(-2f * ShellLateralShrink, 0f, -2f * ShellLateralShrink));
+                shellByRenderer[rendererId] = sb2;
+            }
+
             var so = r.lightmapScaleOffset;
             var verts = mesh.vertices;
             var transform = r.transform;
@@ -777,10 +811,10 @@ public static class LightmapDecoder
                     Vector2 a = ToTexel(uv2[tris[t]], so, width, height);
                     Vector2 b = ToTexel(uv2[tris[t + 1]], so, width, height);
                     Vector2 c = ToTexel(uv2[tris[t + 2]], so, width, height);
-                    float ya = transform.TransformPoint(verts[tris[t]]).y;
-                    float yb = transform.TransformPoint(verts[tris[t + 1]]).y;
-                    float yc = transform.TransformPoint(verts[tris[t + 2]]).y;
-                    RasterizeTriangleHeight(owner, worldY, width, height, a, b, c, ya, yb, yc, rendererId);
+                    Vector3 pa = transform.TransformPoint(verts[tris[t]]);
+                    Vector3 pb = transform.TransformPoint(verts[tris[t + 1]]);
+                    Vector3 pc = transform.TransformPoint(verts[tris[t + 2]]);
+                    RasterizeTrianglePos(owner, worldPos, width, height, a, b, c, pa, pb, pc, rendererId);
                 }
             }
         }
@@ -788,16 +822,33 @@ public static class LightmapDecoder
         if (rendererId == 0)
             return;
 
-        // BFS from every texel at/above the source height into its own island; rewrite only
-        // texels below the refill height. Colours are carried from the ORIGINAL seed texel.
+        // A texel is HIDDEN (target) if it sits below the height threshold, or - on a shell
+        // renderer - laterally outside the shrunk bounds (outer surface / corner sliver).
+        // Seeds are texels that are hidden by NEITHER rule and at/above the source height.
+        System.Func<int, bool> hidden = i =>
+        {
+            if (worldPos[i].y < UnderHeightRefillY) return true;
+            if (shellByRenderer.TryGetValue(owner[i], out var sb3))
+            {
+                var p = worldPos[i];
+                if (p.x < sb3.min.x || p.x > sb3.max.x || p.z < sb3.min.z || p.z > sb3.max.z) return true;
+            }
+            return false;
+        };
+
+        // BFS with NO distance cap that may also cross the gutter (owner==0): entire hidden
+        // islands (e.g. the shell's outer faces, which form their own UV charts with no
+        // visible texel inside them) are reachable from the nearest visible island of the
+        // SAME renderer across the gutter. Traversal is restricted to the gutter and the
+        // seeding renderer's own texels, so no other object's colour can be picked up, and
+        // only owned hidden texels are rewritten.
         var queue = new Queue<int>();
         var from = new int[n];
-        var dist = new byte[n];
         var visited = new bool[n];
         for (int i = 0; i < n; i++)
         {
             from[i] = -1;
-            if (owner[i] != 0 && worldY[i] >= UnderHeightRefillSourceY)
+            if (owner[i] != 0 && worldPos[i].y >= UnderHeightRefillSourceY && !hidden(i))
             {
                 visited[i] = true;
                 from[i] = i;
@@ -805,14 +856,12 @@ public static class LightmapDecoder
             }
         }
 
-        const int radius = 64;
         int rewritten = 0;
 
         while (queue.Count > 0)
         {
             int i = queue.Dequeue();
-            int d = dist[i];
-            if (d >= radius) continue;
+            int seedOwner = owner[from[i]];
             int x = i % width, y = i / width;
 
             for (int dy = -1; dy <= 1; dy++)
@@ -823,11 +872,11 @@ public static class LightmapDecoder
                     if (dx == 0 && dy == 0) continue;
                     int nx = x + dx; if (nx < 0 || nx >= width) continue;
                     int j = ny * width + nx;
-                    if (visited[j] || owner[j] != owner[i]) continue;
+                    if (visited[j]) continue;
+                    if (owner[j] != 0 && owner[j] != seedOwner) continue; // never enter another object's island
                     visited[j] = true;
                     from[j] = from[i];
-                    dist[j] = (byte)(d + 1);
-                    if (worldY[j] < UnderHeightRefillY)
+                    if (owner[j] != 0 && hidden(j))
                     {
                         pixels[j] = pixels[from[j]];
                         rewritten++;
@@ -837,13 +886,14 @@ public static class LightmapDecoder
             }
         }
 
-        Debug.Log($"[ResoniteSDK] LightmapDecoder: under-height refill of \"{sourceLightmap.name}\": " +
-            $"{rewritten} texel(s) below y={UnderHeightRefillY:0.###} rewritten from their island's y>={UnderHeightRefillSourceY:0.###} colour.");
+        Debug.Log($"[ResoniteSDK] LightmapDecoder: hidden-texel refill of \"{sourceLightmap.name}\": " +
+            $"{rewritten} texel(s) rewritten (below y={UnderHeightRefillY:0.###} or laterally outside {shellByRenderer.Count} shell renderer(s), " +
+            $"sources y>={UnderHeightRefillSourceY:0.###}).");
     }
 
-    /// <summary>RasterizeTriangle plus barycentric world-height interpolation per texel.</summary>
-    static void RasterizeTriangleHeight(int[] owner, float[] worldY, int width, int height,
-        Vector2 a, Vector2 b, Vector2 c, float ya, float yb, float yc, int id)
+    /// <summary>RasterizeTriangle plus barycentric world-position interpolation per texel.</summary>
+    static void RasterizeTrianglePos(int[] owner, Vector3[] worldPos, int width, int height,
+        Vector2 a, Vector2 b, Vector2 c, Vector3 pa, Vector3 pb, Vector3 pc, int id)
     {
         int minX = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(a.x, Mathf.Min(b.x, c.x))) - 1);
         int maxX = Mathf.Min(width - 1, Mathf.CeilToInt(Mathf.Max(a.x, Mathf.Max(b.x, c.x))) + 1);
@@ -871,7 +921,7 @@ public static class LightmapDecoder
                 {
                     int i = y * width + x;
                     owner[i] = id;
-                    worldY[i] = e1 * ya + e2 * yb + e0 * yc;
+                    worldPos[i] = e1 * pa + e2 * pb + e0 * pc;
                 }
             }
         }
