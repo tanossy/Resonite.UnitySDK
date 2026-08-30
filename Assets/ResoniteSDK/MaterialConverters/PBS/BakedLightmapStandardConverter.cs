@@ -71,6 +71,24 @@ public class BakedLightmapStandardConverter : ResoniteMaterialConverter
     // switching this to false.
     public static bool LightmapPreviewUploadOnly = false;
 
+    // 2026-08-31 (per Tanossy: "Resonite is far darker than Unity - adjust"): send-time gain on
+    // AlbedoColor for every lightmapped material. In Unity a lightmapped surface is
+    // albedo * lightmap; in Resonite the lightmap sits in SecondaryAlbedo and MULTIPLIES the
+    // scene lighting (albedo * lightmap * (ambient + direct)), and this world's ambient is
+    // small, so the same bake renders several times darker. Calibrated live against Unity's
+    // Scene view with the in-world LightTuning/LightmapTint driver (which writes AlbedoColor,
+    // i.e. the exact same lever): with LightmapDecoder.RangeScale=3.5 already applied to the
+    // lightmap, a warm x3.3/3.1/2.7 on AlbedoColor matched (walls beige, warm ceiling, wood
+    // tones right). Raising RangeScale alone did not get there - the lightmap's HDR range
+    // contributed less than linearly in Resonite - so the remaining gain lives here.
+    //
+    // Applied to ALL lightmapped materials (baseline _Color * gain, so authored tints keep
+    // their ratios); the in-world LightmapTint driver is initialised to the same value
+    // (SceneConverter payload -> build_light_tuning_panel.py) so a re-send reproduces this
+    // look and Tanossy can still nudge it in-world. Per-world value: expect to re-tune for a
+    // room with different bake brightness or a different ambient setup.
+    public static Color AlbedoGain = new Color(3.3f, 3.1f, 2.7f, 1f);
+
     public PBS_MultiUV_MetallicWrapper PBS;
 
     public override IAssetProvider<FrooxEngine.Material> UpdateConversion(UnityEngine.Material material, IConversionContext context)
@@ -97,7 +115,9 @@ public class BakedLightmapStandardConverter : ResoniteMaterialConverter
         data.AlphaClip = material.GetFloat("_Cutoff");
 
         // --- Albedo (UV0) ---
-        data.AlbedoColor = ColorGradingApproximation.Apply(material.GetColor("_Color")).ToColorX_sRGB();
+        var gradedAlbedo = ColorGradingApproximation.Apply(material.GetColor("_Color"));
+        // 2026-08-31: see AlbedoGain's comment. Alpha untouched.
+        data.AlbedoColor = new Color(gradedAlbedo.r * AlbedoGain.r, gradedAlbedo.g * AlbedoGain.g, gradedAlbedo.b * AlbedoGain.b, gradedAlbedo.a).ToColorX_sRGB();
         data.AlbedoTexture = LightmapPreviewUploadOnly ? null : context.GetITexture2D(material.GetTexture("_MainTex"));
         var mainTexScale = material.GetTextureScale("_MainTex");
         var mainTexOffset = material.GetTextureOffset("_MainTex");

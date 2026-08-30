@@ -31,10 +31,25 @@ public static class LightmapTuningPayload
 {
     const float WhiteTolerance = 0.02f;
 
+    /// <summary>
+    /// The value the in-world LightmapTint driver should start at: the same gain
+    /// BakedLightmapStandardConverter already multiplied into every AlbedoColor at send time,
+    /// so that "driver on" and "driver off" look identical until someone nudges it in-world.
+    /// </summary>
+    public static float[] TintDefault()
+    {
+        var g = BakedLightmapStandardConverter.AlbedoGain;
+        return new[] { g.r, g.g, g.b };
+    }
+
     public static void Fill(SceneConverter converter, List<string> tintTargets, List<string> formatTargets, List<string> skipped)
     {
         if (converter == null)
             return;
+
+        // 2026-08-31: the sent AlbedoColor is baseline * AlbedoGain, so "white baseline" now
+        // means "equals the gain" - compare against it rather than against (1,1,1).
+        var gain = BakedLightmapStandardConverter.AlbedoGain;
 
         foreach (var mat in Object.FindObjectsOfType<BakedLightmapStandardConverter>())
         {
@@ -44,9 +59,9 @@ public static class LightmapTuningPayload
             var data = mat.PBS.Data;
             var c = data.AlbedoColor.color;
 
-            bool white = Mathf.Abs(c.r - 1f) <= WhiteTolerance &&
-                Mathf.Abs(c.g - 1f) <= WhiteTolerance &&
-                Mathf.Abs(c.b - 1f) <= WhiteTolerance;
+            bool white = Mathf.Abs(c.r - gain.r) <= WhiteTolerance * gain.r &&
+                Mathf.Abs(c.g - gain.g) <= WhiteTolerance * gain.g &&
+                Mathf.Abs(c.b - gain.b) <= WhiteTolerance * gain.b;
 
             if (!white)
             {

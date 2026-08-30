@@ -1102,6 +1102,9 @@ public class SceneConverter : IConversionContext
         public List<string> LightmapTintTargets { get; set; } = new List<string>();
         public List<string> LightmapFormatTargets { get; set; } = new List<string>();
         public List<string> LightmapTintSkipped { get; set; } = new List<string>();
+        // 2026-08-31: initial value for the in-world LightmapTint driver = the AlbedoGain the
+        // converter already applied (see LightmapTuningPayload.TintDefault). [r, g, b]
+        public float[] LightmapTintDefault { get; set; } = new[] { 1f, 1f, 1f };
     }
 
     // Absolute path to the eldorado monorepo checkout that owns build_light_tuning_panel.py and
@@ -1125,6 +1128,7 @@ public class SceneConverter : IConversionContext
             // "no lights" early-out below, since a scene can have baked lightmaps and no live
             // Light components and still want the lightmap controls.
             LightmapTuningPayload.Fill(this, payload.LightmapTintTargets, payload.LightmapFormatTargets, payload.LightmapTintSkipped);
+            payload.LightmapTintDefault = LightmapTuningPayload.TintDefault();
 
             if (lights.Count == 0 && payload.LightmapTintTargets.Count == 0 && payload.LightmapFormatTargets.Count == 0)
             {
