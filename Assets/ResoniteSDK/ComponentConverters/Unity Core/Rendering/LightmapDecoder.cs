@@ -633,9 +633,8 @@ public static class LightmapDecoder
     // those owned rows first - this pass then replaces Bakery's bright dilation in the gutter
     // with the corrected island edge colour. Runs AFTER the refill; 24 covers the 4x send
     // downscale + bilinear reach (16) plus the stray Bakery dilation measured just beyond it.
-    // OFF by default together with the refill (see UnderHeightRefillY) - the approved look
-    // keeps the subtle wall-base line the pair removes.
-    public static int OwnershipRedilateRadius = 0;
+    // ON by default together with the refill (see UnderHeightRefillY).
+    public static int OwnershipRedilateRadius = 24;
 
     static void RedilateByOwnership(Color[] pixels, int width, int height, Texture2D sourceLightmap)
     {
@@ -732,13 +731,12 @@ public static class LightmapDecoder
     // the colour of the nearest texel OF THE SAME RENDERER at or above UnderHeightRefillSourceY
     // (BFS within the island, so no neighbour's colour can leak in). Runs on the raw decoded
     // atlas before the downscale. A scene with nothing below the threshold is untouched.
-    // 2026-08-31 final call by Tanossy: with the refill ON the wall base goes completely clean,
-    // but he prefers the LOOK of the un-refilled bake - a subtle thin bright line along the
-    // wall base and corner ("光の帯、コーナーに少しだけあったとき[が]最大によかった"). So the
-    // pass ships OFF by default and stays available for scenes where the band reads as a bug
-    // rather than as skirting light. Set to 0.19 (with OwnershipRedilateRadius 24) to clean it.
+    // 2026-08-31: shipped OFF for one send on a misread of Tanossy's feedback - the un-refilled
+    // bake immediately brought the band back along every wall base and he called it strictly
+    // worse ("もっとひどくなったぞ"). ON is the approved default; what remains to improve is the
+    // vertical line at wall-wall corners (the same hidden-sliver mechanism, horizontal).
     /// <summary>Texels whose surface sits below this world Y are refilled. 0 disables.</summary>
-    public static float UnderHeightRefillY = 0f;
+    public static float UnderHeightRefillY = 0.19f;
     /// <summary>Replacement colours are taken from texels at or above this world Y.</summary>
     public static float UnderHeightRefillSourceY = 0.30f;
 
