@@ -107,6 +107,10 @@ public class Texture2DConverter : AssetConverter<StaticTexture2DWrapper, StaticT
 
         Provider.Data.MaxSize = _maxSize;
 
+        // 2026-08-30: baked-lightmap-only overrides (BC6H_LZMA/Linear/MinSize/ForceExactVariant,
+        // adopted from Lumos) - no-op for every other texture. See LightmapTextureSettings.cs.
+        LightmapTextureSettings.ApplyToProvider(Source, Provider.Data);
+
         return Provider.CollectData(context);
     }
 

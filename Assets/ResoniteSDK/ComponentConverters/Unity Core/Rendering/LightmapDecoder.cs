@@ -118,6 +118,35 @@ public static class LightmapDecoder
     // disconnect risk; consider raising it further once stability is confirmed).
     public static int MaxPreviewTextureSize = 256;
 
+    // 2026-08-30: HDR export, adopted from Lumos (https://github.com/ultrawidegamer/Lumos,
+    // BSD-2-Clause). Reading that tool's source showed it sends the baked lightmap as raw float
+    // pixels (LinkInterface.ImportTexture(ImportTexture2DRawDataHDR)) stored as BC6H_LZMA on the
+    // Resonite side, so texels above 1.0 survive and the multiply-composite can *brighten* a
+    // surface, not only darken it. Everything above this line (RangeScale, the 0..1 clamp, the
+    // clip warning, the 256px MaxPreviewTextureSize) exists to squeeze HDR radiance into an 8-bit
+    // sRGB PNG - a self-imposed loss: this SDK's own Texture2DConverter.ConvertTexture2D already
+    // uploads any HDR-format Texture2D through ImportTexture2DRawDataHDR (Lumos's upload code is
+    // near-verbatim that function), so the only thing standing between us and lossless HDR was
+    // the file format written here.
+    //
+    // true  -> DecodeAndSave writes LMTex_*.exr (RGBAHalf, linear, readable, no mipmaps) with
+    //          NO clamp and NO gamma encode; RangeScale/ColorSaturationCompensation still apply
+    //          as plain linear multipliers; downscale limit is HdrMaxTextureSize instead of
+    //          MaxPreviewTextureSize. Resonite-side StaticTexture2D settings for the result
+    //          (BC6H_LZMA, Linear, MinSize 8192, ForceExactVariant) are applied by
+    //          LightmapTextureSettings.cs.
+    // false -> the pre-2026-08-30 8-bit sRGB PNG path, byte-for-byte unchanged.
+    // Exposed as a toggle in the Lightmap Baker panel's "Baked Lightmap Exposure" section.
+    // NOTE: the RangeScale=1.1 / Saturation=0.6 / LightTuning.IntensityCeiling values were all
+    // tuned against the clamped PNG path - expect to re-tune once this is verified live.
+    public static bool HdrExport = true;
+
+    // Downscale limit for the HDR path. Lumos ships 1024^2 float lightmaps (16 MB raw per
+    // texture) through ResoniteLink in production, which is the evidence this size is
+    // transportable; keep MaxPreviewTextureSize=256 for the PNG path so that path's behavior
+    // does not change.
+    public static int HdrMaxTextureSize = 1024;
+
     /// <summary>
     /// Clears the in-memory decoded-lightmap front cache. Called from
     /// LightmapMaterialCache's "Resonite SDK/Clear Generated Lightmap Variants" menu item right
@@ -175,14 +204,19 @@ public static class LightmapDecoder
         var folder = LightmapVariantStorage.GetSceneFolder(sceneGuid);
         LightmapVariantStorage.EnsureFolder(folder);
 
-        var path = desaturate ? $"{folder}/LMTex_{lightmapIndex}_gray.png" : $"{folder}/LMTex_{lightmapIndex}.png";
+        // 2026-08-30: .exr for the HDR export path, .png for the legacy LDR path (see HdrExport).
+        // Different extensions on purpose - flipping the toggle must never hand back a stale
+        // asset of the other kind, and Texture2DConverter/LightmapTextureSettings key off the
+        // "LMTex_" prefix only, so both spellings take the raw-pixel upload path.
+        var ext = HdrExport ? "exr" : "png";
+        var path = desaturate ? $"{folder}/LMTex_{lightmapIndex}_gray.{ext}" : $"{folder}/LMTex_{lightmapIndex}.{ext}";
 
         // Texture2D.imageContentsHash is a content hash of the texture's actual pixel data, so it
         // changes whenever the lightmap is re-baked (even if the file path/GUID stays the same),
         // and stays stable across Editor sessions/domain reloads for an unchanged bake. We record
         // it in the decoded PNG's own TextureImporter.userData so a later call can tell whether
         // it needs to re-decode or can just hand back the existing asset.
-        var sourceHash = $"{sourceLightmap.imageContentsHash}|range:{RangeScale:0.########}|max:{MaxPreviewTextureSize}|gray:{desaturate}|sat:{ColorSaturationCompensation:0.###}";
+        var sourceHash = $"{sourceLightmap.imageContentsHash}|range:{RangeScale:0.########}|max:{MaxPreviewTextureSize}|gray:{desaturate}|sat:{ColorSaturationCompensation:0.###}|hdr:{HdrExport}|hdrmax:{HdrMaxTextureSize}";
 
         // Memory front-cache lookup first. `cached != null` uses Unity's overloaded null check,
         // so a destroyed/unloaded Texture2D (e.g. after an AssetDatabase.DeleteAsset elsewhere, or
@@ -354,7 +388,7 @@ public static class LightmapDecoder
 
         int outputWidth = width;
         int outputHeight = height;
-        int maxPreviewSize = Mathf.Max(1, MaxPreviewTextureSize);
+        int maxPreviewSize = Mathf.Max(1, HdrExport ? HdrMaxTextureSize : MaxPreviewTextureSize);
 
         if (Mathf.Max(width, height) > maxPreviewSize)
         {
@@ -440,6 +474,19 @@ public static class LightmapDecoder
                 scaledB = Mathf.Lerp(luma, scaledB, sat);
             }
 
+            if (HdrExport)
+            {
+                // 2026-08-30 HDR path: linear radiance straight through - no clamp, no gamma
+                // (the EXR is imported linear, and Resonite samples it linear). Alpha forced to
+                // 1 exactly like the PNG path so SecondaryAlbedo's alpha never leaks in.
+                c.r = scaledR;
+                c.g = scaledG;
+                c.b = scaledB;
+                c.a = 1f;
+                pixels[i] = c;
+                continue;
+            }
+
             c.r = Mathf.Clamp01(scaledR);
             c.g = Mathf.Clamp01(scaledG);
             c.b = Mathf.Clamp01(scaledB);
@@ -448,7 +495,14 @@ public static class LightmapDecoder
             pixels[i] = skipGammaConversion ? c : c.gamma;
         }
 
-        if (maxChannelObserved > 1f)
+        if (HdrExport)
+        {
+            // Informational only - nothing is clipped on this path.
+            Debug.Log($"[ResoniteSDK] LightmapDecoder: HDR export of \"{source.name}\" (-> {path}) " +
+                $"{outputWidth}x{outputHeight}, max channel value (after RangeScale={RangeScale:0.###}) = {maxChannelObserved:0.###}, " +
+                $"{clippedPixelCount} pixel(s) above 1.0 preserved.");
+        }
+        else if (maxChannelObserved > 1f)
         {
             float clippedPercent = pixels.Length > 0 ? 100f * clippedPixelCount / pixels.Length : 0f;
             Debug.LogWarning($"[ResoniteSDK] LightmapDecoder: lightmap \"{source.name}\" (-> {path}) has HDR values above " +
@@ -459,15 +513,21 @@ public static class LightmapDecoder
                 "down before it clips.");
         }
 
-        var outputTex = new Texture2D(outputWidth, outputHeight, TextureFormat.RGBA32, false, false);
+        // 2026-08-30: HDR path encodes a linear RGBAFloat texture to EXR (half-float storage, ZIP
+        // compressed, lossless); LDR path is the original RGBA32 -> PNG.
+        var outputTex = HdrExport
+            ? new Texture2D(outputWidth, outputHeight, TextureFormat.RGBAFloat, false, true)
+            : new Texture2D(outputWidth, outputHeight, TextureFormat.RGBA32, false, false);
         outputTex.SetPixels(pixels);
         outputTex.Apply();
 
-        byte[] png;
+        byte[] encoded;
 
         try
         {
-            png = outputTex.EncodeToPNG();
+            encoded = HdrExport
+                ? outputTex.EncodeToEXR(Texture2D.EXRFlags.CompressZIP)
+                : outputTex.EncodeToPNG();
         }
         finally
         {
@@ -476,7 +536,7 @@ public static class LightmapDecoder
 
         var fullPath = Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath));
-        File.WriteAllBytes(fullPath, png);
+        File.WriteAllBytes(fullPath, encoded);
 
         AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
 
@@ -492,8 +552,26 @@ public static class LightmapDecoder
             return null;
         }
 
-        importer.sRGBTexture = true;
-        importer.textureCompression = TextureImporterCompression.Uncompressed;
+        if (HdrExport)
+        {
+            // Linear (not sRGB) radiance; Uncompressed so Unity imports the EXR as RGBAHalf
+            // rather than BC6H (Texture2DConverter reads it back with GetPixels, which needs an
+            // uncompressed format - and RGBAHalf passes its IsHDR() check, selecting the
+            // ImportTexture2DRawDataHDR upload). Readable so no CopyTexture detour is needed;
+            // no mipmaps (a lightmap atlas must never be sampled across island borders);
+            // maxTextureSize raised so the importer never shrinks the atlas below what was
+            // decoded (HdrMaxTextureSize caps it before we get here).
+            importer.sRGBTexture = false;
+            importer.textureCompression = TextureImporterCompression.Uncompressed;
+            importer.isReadable = true;
+            importer.mipmapEnabled = false;
+            importer.maxTextureSize = 8192;
+        }
+        else
+        {
+            importer.sRGBTexture = true;
+            importer.textureCompression = TextureImporterCompression.Uncompressed;
+        }
         importer.wrapMode = TextureWrapMode.Clamp;
         importer.userData = sourceHash;
         importer.SaveAndReimport();

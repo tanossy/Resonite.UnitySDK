@@ -315,6 +315,14 @@ public class LightmapPipelineWindow : EditorWindow
     float _bakedLightmapRangeScale = 1.1f;
     float _bakedLightmapSaturation = 0.6f;
 
+    // 2026-08-30: mirrors LightmapDecoder.HdrExport (Lumos-derived HDR lightmap export - see
+    // that field's comment). Default on; the checkbox exists so the old clamped-PNG path can be
+    // A/B'd live against the new one without a code edit.
+    bool _bakedLightmapHdrExport = true;
+
+    const string TooltipHdrExportJA = "ベイクライトマップをHDR(EXR→BC6H)のまま送る。ONだと1.0超の明るさが保持され、乗算合成でも明るくなる方向に働く（Lumos方式）。OFFは従来の8bit PNG(0..1クランプ・256px)経路";
+    const string TooltipHdrExportEN = "Send the baked lightmap as HDR (EXR -> BC6H on the Resonite side). When on, texels above 1.0 survive so the multiply composite can brighten as well as darken (the approach used by Lumos). Off = the legacy 8-bit PNG path (clamped to 0..1, 256px).";
+
     const string BakedLightmapExposureHeaderJA = "ベイクライトマップ露出";
     const string BakedLightmapExposureHeaderEN = "Baked Lightmap Exposure";
 
@@ -824,8 +832,13 @@ public class LightmapPipelineWindow : EditorWindow
             new GUIContent(L("彩度", "Saturation"), L(TooltipBakedSaturationJA, TooltipBakedSaturationEN)),
             _bakedLightmapSaturation, 0f, 1f);
 
+        _bakedLightmapHdrExport = EditorGUILayout.Toggle(
+            new GUIContent(L("HDRで送信（Lumos方式）", "HDR export (Lumos-style)"), L(TooltipHdrExportJA, TooltipHdrExportEN)),
+            _bakedLightmapHdrExport);
+
         LightmapDecoder.RangeScale = _bakedLightmapRangeScale;
         LightmapDecoder.ColorSaturationCompensation = _bakedLightmapSaturation;
+        LightmapDecoder.HdrExport = _bakedLightmapHdrExport;
     }
 
     // ------------------------------------------------------------------

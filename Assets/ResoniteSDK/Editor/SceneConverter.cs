@@ -1089,6 +1089,15 @@ public class SceneConverter : IConversionContext
     {
         public int Port { get; set; }
         public List<LightTuningPanelInputLight> Lights { get; set; } = new List<LightTuningPanelInputLight>();
+
+        // 2026-08-30 (Lumos-derived, see LightmapTuningPayload.cs): field IDs the panel script
+        // wires into one ValueMultiDriver each - AlbedoColor of every white-baseline lightmapped
+        // material ("LightTuning/LightmapTint") and PreferredFormat of every lightmap texture
+        // ("LightTuning/LightmapLossless"). LightmapTintSkipped lists materials left undriven
+        // because their authored color isn't white.
+        public List<string> LightmapTintTargets { get; set; } = new List<string>();
+        public List<string> LightmapFormatTargets { get; set; } = new List<string>();
+        public List<string> LightmapTintSkipped { get; set; } = new List<string>();
     }
 
     // Absolute path to the eldorado monorepo checkout that owns build_light_tuning_panel.py and
@@ -1106,13 +1115,18 @@ public class SceneConverter : IConversionContext
                 .Where(c => c != null && c.Target != null && c.Binding != null && c.Binding.Data != null)
                 .ToList();
 
-            if (lights.Count == 0)
+            var payload = new LightTuningPanelInputPayload { Port = _window.Port };
+
+            // 2026-08-30: lightmap tint/lossless targets (Lumos-derived) - gathered before the
+            // "no lights" early-out below, since a scene can have baked lightmaps and no live
+            // Light components and still want the lightmap controls.
+            LightmapTuningPayload.Fill(this, payload.LightmapTintTargets, payload.LightmapFormatTargets, payload.LightmapTintSkipped);
+
+            if (lights.Count == 0 && payload.LightmapTintTargets.Count == 0 && payload.LightmapFormatTargets.Count == 0)
             {
-                Debug.Log("[LightTuningPanel] No lights found in this scene - skipping build_light_tuning_panel.py.");
+                Debug.Log("[LightTuningPanel] No lights and no lightmapped materials/textures found in this scene - skipping build_light_tuning_panel.py.");
                 return;
             }
-
-            var payload = new LightTuningPanelInputPayload { Port = _window.Port };
 
             foreach (var lc in lights)
             {

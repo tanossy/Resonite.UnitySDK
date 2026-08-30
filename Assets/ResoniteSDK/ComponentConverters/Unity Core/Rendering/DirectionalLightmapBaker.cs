@@ -515,6 +515,21 @@ public static class DirectionalLightmapBaker
     /// </summary>
     static Texture2D LoadReadableColorAtlas(Texture2D decodedColor)
     {
+        // 2026-08-30 (LightmapDecoder.HdrExport): on the HDR path the decoded atlas is an EXR
+        // imported linear + readable (RGBAHalf), so GetPixels() already returns linear floats in
+        // the asset's own (production-verified) orientation - no PNG byte round trip and no
+        // gamma decode apply. Texture2D.LoadImage cannot read EXR bytes at all, so without this
+        // branch the directional bake would silently fall back to the plain atlas whenever HDR
+        // export is on. The PNG branch below is unchanged.
+        if (decodedColor != null && decodedColor.isReadable &&
+            (decodedColor.format == TextureFormat.RGBAHalf || decodedColor.format == TextureFormat.RGBAFloat))
+        {
+            var hdrCopy = new Texture2D(decodedColor.width, decodedColor.height, TextureFormat.RGBAFloat, false, true);
+            hdrCopy.SetPixels(decodedColor.GetPixels());
+            hdrCopy.Apply();
+            return hdrCopy;
+        }
+
         var assetPath = AssetDatabase.GetAssetPath(decodedColor);
 
         if (string.IsNullOrEmpty(assetPath))
