@@ -82,7 +82,18 @@ public static class LightmapDecoder
     // side, just never applied here). Exposed as a slider in the Lightmap Baker panel's
     // "Send-Time Light Tuning" section (see LightmapPipelineWindow.cs) so it can be re-tuned per
     // room without a code edit; changing it here still works too (both write the same field).
-    public static float RangeScale = 1.1f;
+    // 2026-08-31 re-calibration after the HDR export switch (per Tanossy: "Resonite is far darker
+    // than Unity - adjust"). Structural reason: a Unity lightmapped surface renders as
+    // albedo * lightmap (+ direct light), but in Resonite the lightmap sits in
+    // SecondaryAlbedo, i.e. albedo * lightmap * (ambient + direct) - the lightmap MULTIPLIES
+    // the scene lighting instead of replacing it, so with a ~0.6-mean bake the room comes out
+    // several times darker. Calibrated live with the in-world LightTuning/LightmapTint driver
+    // (which scales AlbedoColor, mathematically the same lever as this gain): x1 = far too
+    // dark, x6 = blown out, a warm x3.1-3.3 matched Unity's Scene view closely (walls beige,
+    // floor/wardrobe wood tones right, ceiling still a touch dark). 1.1 * 3.2 ~= 3.5.
+    // Bake-data max was 1.6, so post-gain peaks reach ~5.6 - fine for the HDR (EXR -> BC6H)
+    // path; do NOT use this value with HdrExport=false (8-bit PNG would clip most of it).
+    public static float RangeScale = 3.5f;
 
     // 2026-08-08 (per Tanossy's feedback: "the yellow light is too strong"): LightConverter.
     // WhiteBalanceShift only pulls Point Light colors toward white, so it has no effect on the tint
@@ -92,7 +103,12 @@ public static class LightmapDecoder
     // desaturate=true). 0.5 was the first real-machine-verified value (keeps some color character
     // while suppressing the warm cast). Same per-scene caveat and panel exposure as RangeScale
     // above.
-    public static float ColorSaturationCompensation = 0.6f;
+    // 2026-08-31: back to 1.0 (keep the bake's own warm cast). The same live calibration above
+    // needed a warm-biased tint (R 3.3 / G 3.1 / B 2.7) to match Unity's beige walls and warm
+    // wood - i.e. the 0.6 desaturation had been removing colour the Unity reference actually
+    // has. The 0.6 value dated from the pre-HDR era when the whole room read as "too yellow";
+    // with the corner-seam and brightness issues fixed, the yellow was never the bake's fault.
+    public static float ColorSaturationCompensation = 1.0f;
 
     // ResoniteLink can drop the WebSocket while importing very large decoded lightmap PNGs. Keep
     // this preview export small enough for reliable send/retry while preserving the same atlas UVs.

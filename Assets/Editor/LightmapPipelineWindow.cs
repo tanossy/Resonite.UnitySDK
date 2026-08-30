@@ -312,8 +312,11 @@ public class LightmapPipelineWindow : EditorWindow
     // Both fields were tuned against one specific scene's bake data; a new room's bake can be
     // darker or brighter, so these need to be re-checked per room rather than assumed correct
     // (this is the whole reason they're a slider here instead of only a code constant).
-    float _bakedLightmapRangeScale = 1.1f;
-    float _bakedLightmapSaturation = 0.6f;
+    // 2026-08-31: defaults re-calibrated live against Unity's Scene view after the HDR export
+    // switch - see LightmapDecoder.RangeScale / ColorSaturationCompensation's own comments.
+    // These mirror into LightmapDecoder every OnGUI, so they must match the statics there.
+    float _bakedLightmapRangeScale = 3.5f;
+    float _bakedLightmapSaturation = 1.0f;
 
     // 2026-08-30: mirrors LightmapDecoder.HdrExport (Lumos-derived HDR lightmap export - see
     // that field's comment). Default on; the checkbox exists so the old clamped-PNG path can be
