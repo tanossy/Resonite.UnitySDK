@@ -143,15 +143,36 @@ public class Texture2DConverter : AssetConverter<StaticTexture2DWrapper, StaticT
             Debug.Log($"[ResoniteSDK] Texture2DConverter: sending generated lightmap preview \"{texture.name}\" as raw pixel data instead of file import.");
         }
 
+        // 2026-08-30: the readable copy below used to be created and never destroyed - one full
+        // GPU+CPU texture copy leaked per non-readable texture per send (see
+        // ConversionMemoryHygiene.cs for the per-send memory growth this contributes to). Kept
+        // in a local so the finally block below can DestroyImmediate it once its pixels have been
+        // copied into the ResoniteLink message; `texture` itself may be the original asset, which
+        // must never be destroyed.
+        UnityEngine.Texture2D readableCopy = null;
+
         if (!texture.isReadable)
         {
-            var readableTexture = new UnityEngine.Texture2D(texture.width, texture.height, texture.format, false);
+            readableCopy = new UnityEngine.Texture2D(texture.width, texture.height, texture.format, false);
 
-            Graphics.CopyTexture(texture, 0, 0, readableTexture, 0, 0);
+            Graphics.CopyTexture(texture, 0, 0, readableCopy, 0, 0);
 
-            texture = readableTexture;
+            texture = readableCopy;
         }
 
+        try
+        {
+            return ExtractRawPixels(texture);
+        }
+        finally
+        {
+            if (readableCopy != null)
+                UnityEngine.Object.DestroyImmediate(readableCopy);
+        }
+    }
+
+    static ResoniteLink.Message ExtractRawPixels(UnityEngine.Texture2D texture)
+    {
         // It is not supported directly, so we have to extract the raw data and send it over
         if (texture.format.IsHDR())
         {

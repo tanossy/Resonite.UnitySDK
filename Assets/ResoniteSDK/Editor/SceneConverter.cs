@@ -267,6 +267,10 @@ public class SceneConverter : IConversionContext
 
     void ConvertScene(ResoniteSdkConversionPass pass)
     {
+        // 2026-08-30: per-send memory hygiene (managed GC + asset GC with before/after logging) -
+        // see ConversionMemoryHygiene.cs for the Editor.log evidence behind it.
+        ConversionMemoryHygiene.BeforeSend($"before {pass} send");
+
         if (pass != ResoniteSdkConversionPass.MeshesOnly && ForceRefreshGeneratedLightmaps)
             LightmapMaterialCache.ClearGeneratedLightmapVariants();
 
