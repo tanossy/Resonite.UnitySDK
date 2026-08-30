@@ -87,7 +87,7 @@ public class BakedLightmapStandardConverter : ResoniteMaterialConverter
     // (SceneConverter payload -> build_light_tuning_panel.py) so a re-send reproduces this
     // look and Tanossy can still nudge it in-world. Per-world value: expect to re-tune for a
     // room with different bake brightness or a different ambient setup.
-    public static Color AlbedoGain = new Color(3.3f, 3.1f, 2.7f, 1f);
+    public static Color AlbedoGain = new Color(2.71f, 2.45f, 2.23f, 1f);
 
     public PBS_MultiUV_MetallicWrapper PBS;
 
