@@ -232,7 +232,7 @@ public static class LightmapDecoder
         // and stays stable across Editor sessions/domain reloads for an unchanged bake. We record
         // it in the decoded PNG's own TextureImporter.userData so a later call can tell whether
         // it needs to re-decode or can just hand back the existing asset.
-        var sourceHash = $"{sourceLightmap.imageContentsHash}|range:{RangeScale:0.########}|max:{MaxPreviewTextureSize}|gray:{desaturate}|sat:{ColorSaturationCompensation:0.###}|hdr:{HdrExport}|hdrmax:{HdrMaxTextureSize}";
+        var sourceHash = $"{sourceLightmap.imageContentsHash}|range:{RangeScale:0.########}|max:{MaxPreviewTextureSize}|gray:{desaturate}|sat:{ColorSaturationCompensation:0.###}|hdr:{HdrExport}|hdrmax:{HdrMaxTextureSize}|redilate:{OwnershipRedilateRadius}";
 
         // Memory front-cache lookup first. `cached != null` uses Unity's overloaded null check,
         // so a destroyed/unloaded Texture2D (e.g. after an AssetDatabase.DeleteAsset elsewhere, or
@@ -401,6 +401,12 @@ public static class LightmapDecoder
 
             UnityEngine.Object.DestroyImmediate(blitMaterial);
         }
+
+        // 2026-08-31: re-dilate the atlas by UV2 OWNERSHIP before any downscale - see the
+        // method's comment for the measured failure this fixes (bright band along the wall/
+        // floor edge that the send-time gain turned pure white).
+        if (OwnershipRedilateRadius > 0)
+            RedilateByOwnership(pixels, width, height, source);
 
         int outputWidth = width;
         int outputHeight = height;
@@ -593,6 +599,152 @@ public static class LightmapDecoder
         importer.SaveAndReimport();
 
         return AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+    }
+
+    // 2026-08-31 (per Tanossy: "now it's blinding - a white band along the wall base"). Measured
+    // on the 4096^2 bake: the wall island's own bottom rows (the 0.16 m of wall hidden under the
+    // floor slab) are 0.00, but the gutter texels immediately outside that edge are ~0.5 -
+    // Bakery's dilation of a bright NEIGHBOUR island runs right up to the wall's edge. The
+    // visible wall starts ~3 texels above the island edge, so the 4x box downscale + bilinear
+    // sampling mixes "black under-floor rows + bright gutter rows" into the wall-base texel
+    // (~0.25), and the send-time gain (RangeScale 3.5 x AlbedoGain 3.3) turns that into ~3 =
+    // pure white. Wider gutters don't help: whatever fills the gutter next to an island is what
+    // bilinear filtering blends into its edge.
+    //
+    // Fix: decide gutter texels by OWNERSHIP. Every lightmapped renderer's UV2 triangles are
+    // rasterised into an owner mask; then a breadth-first dilation from every owned texel fills
+    // the un-owned gutter with the colour of the NEAREST owned texel - i.e. each island is
+    // surrounded by its own edge colour, never a neighbour's, out to OwnershipRedilateRadius
+    // texels (which must exceed the downscale factor + bilinear reach; 16 covers the 4x send
+    // downscale with margin). Foreign dilation Bakery wrote into the gutter is overwritten;
+    // texels actually covered by triangles are never modified. Runs on the raw decoded atlas
+    // before RangeScale/downscale, on both the HDR and PNG paths.
+    // 2026-08-31 outcome: measured against the real bake, the white band was NOT foreign
+    // dilation - the bright rows are owned by the wall itself (its under-floor sliver, sky-lit
+    // from below), so this pass cannot remove it. It does exactly what it says (2.9M gutter
+    // texels rewritten with nearest-owner colour) but its visual effect has not been checked
+    // live, so it stays OFF (0) until it is. Set >0 to enable.
+    public static int OwnershipRedilateRadius = 0;
+
+    static void RedilateByOwnership(Color[] pixels, int width, int height, Texture2D sourceLightmap)
+    {
+        int lightmapIndex = -1;
+        var maps = LightmapSettings.lightmaps;
+        for (int i = 0; i < maps.Length; i++)
+            if (maps[i].lightmapColor == sourceLightmap) { lightmapIndex = i; break; }
+
+        if (lightmapIndex < 0)
+            return; // Not a scene lightmap (e.g. a synthetic texture in tests) - nothing to own it.
+
+        int n = width * height;
+        var owner = new int[n];      // 0 = gutter, otherwise 1-based renderer id
+        int rendererId = 0;
+
+        foreach (var r in UnityEngine.Object.FindObjectsOfType<MeshRenderer>())
+        {
+            if (r == null || r.lightmapIndex != lightmapIndex) continue;
+            var mf = r.GetComponent<MeshFilter>();
+            var mesh = mf != null ? mf.sharedMesh : null;
+            if (mesh == null) continue;
+            var uv2 = mesh.uv2;
+            if (uv2 == null || uv2.Length != mesh.vertexCount) continue;
+
+            rendererId++;
+            var so = r.lightmapScaleOffset;
+
+            for (int s = 0; s < mesh.subMeshCount; s++)
+            {
+                var tris = mesh.GetTriangles(s);
+                for (int t = 0; t + 2 < tris.Length; t += 3)
+                {
+                    Vector2 a = ToTexel(uv2[tris[t]], so, width, height);
+                    Vector2 b = ToTexel(uv2[tris[t + 1]], so, width, height);
+                    Vector2 c = ToTexel(uv2[tris[t + 2]], so, width, height);
+                    RasterizeTriangle(owner, width, height, a, b, c, rendererId);
+                }
+            }
+        }
+
+        if (rendererId == 0)
+            return;
+
+        // BFS dilation from every owned texel into the gutter, nearest owner wins.
+        var queue = new Queue<int>();
+        var dist = new byte[n];
+        for (int i = 0; i < n; i++)
+            if (owner[i] != 0) queue.Enqueue(i);
+
+        int radius = Mathf.Clamp(OwnershipRedilateRadius, 1, 255);
+        int rewritten = 0;
+
+        while (queue.Count > 0)
+        {
+            int i = queue.Dequeue();
+            int d = dist[i];
+            if (d >= radius) continue;
+            int x = i % width, y = i / width;
+
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                int ny = y + dy; if (ny < 0 || ny >= height) continue;
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    if (dx == 0 && dy == 0) continue;
+                    int nx = x + dx; if (nx < 0 || nx >= width) continue;
+                    int j = ny * width + nx;
+                    if (owner[j] != 0) continue;
+                    owner[j] = owner[i];
+                    dist[j] = (byte)(d + 1);
+                    pixels[j] = pixels[i];
+                    rewritten++;
+                    queue.Enqueue(j);
+                }
+            }
+        }
+
+        Debug.Log($"[ResoniteSDK] LightmapDecoder: ownership re-dilation of \"{sourceLightmap.name}\": {rendererId} renderer(s) rasterised, " +
+            $"{rewritten} gutter texel(s) rewritten within {radius} texels of their nearest island.");
+    }
+
+    static Vector2 ToTexel(Vector2 uv, Vector4 so, int width, int height)
+    {
+        return new Vector2((uv.x * so.x + so.z) * width, (uv.y * so.y + so.w) * height);
+    }
+
+    /// <summary>
+    /// Conservative triangle rasteriser: a texel is owned if its centre lies inside the
+    /// triangle expanded by half a texel, so island edge texels count as owned.
+    /// </summary>
+    static void RasterizeTriangle(int[] owner, int width, int height, Vector2 a, Vector2 b, Vector2 c, int id)
+    {
+        int minX = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(a.x, Mathf.Min(b.x, c.x))) - 1);
+        int maxX = Mathf.Min(width - 1, Mathf.CeilToInt(Mathf.Max(a.x, Mathf.Max(b.x, c.x))) + 1);
+        int minY = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(a.y, Mathf.Min(b.y, c.y))) - 1);
+        int maxY = Mathf.Min(height - 1, Mathf.CeilToInt(Mathf.Max(a.y, Mathf.Max(b.y, c.y))) + 1);
+        if (minX > maxX || minY > maxY) return;
+
+        float area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        if (Mathf.Abs(area) < 1e-6f) return;
+        float inv = 1f / area;
+        const float pad = 0.5f; // half-texel expansion, in barycentric-scaled units below
+
+        for (int y = minY; y <= maxY; y++)
+        {
+            float py = y + 0.5f;
+            for (int x = minX; x <= maxX; x++)
+            {
+                float px = x + 0.5f;
+                // Signed edge distances (in texels) - positive inside for consistent winding.
+                float e0 = ((b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x)) * inv;
+                float e1 = ((c.x - b.x) * (py - b.y) - (c.y - b.y) * (px - b.x)) * inv;
+                float e2 = ((a.x - c.x) * (py - c.y) - (a.y - c.y) * (px - c.x)) * inv;
+                // Convert barycentric weights back to a texel-space tolerance per edge.
+                float l0 = Vector2.Distance(a, b), l1 = Vector2.Distance(b, c), l2 = Vector2.Distance(c, a);
+                float tol0 = pad * l0 / Mathf.Abs(area), tol1 = pad * l1 / Mathf.Abs(area), tol2 = pad * l2 / Mathf.Abs(area);
+                if (e0 >= -tol0 && e1 >= -tol1 && e2 >= -tol2)
+                    owner[y * width + x] = id;
+            }
+        }
     }
 
     static Color[] ResizeBilinear(Color[] sourcePixels, int sourceWidth, int sourceHeight, int outputWidth, int outputHeight)

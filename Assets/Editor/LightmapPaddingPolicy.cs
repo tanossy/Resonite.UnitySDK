@@ -196,11 +196,23 @@ public static class LightmapPaddingPolicy
         // Plane001)" - furniture and wall islands packed right against the bright floor, which
         // is what the faint band along the wall/floor edge was. Same raise-only rule and the
         // same target, so both gutters survive the send-time downscale equally.
-        ApplyBakeryAtlasPadding(log);
+        // 2026-08-31 (per Tanossy: "the previous state was far better"): raising this to 24
+        // re-packed the atlas and the wall/floor edge went from a faint band to a blinding white
+        // one. Measured: the wall island's own bottom rows (the 0.1 m of wall under the floor
+        // slab, sky-lit from below - a scene-geometry issue) are ~0.5 and legitimately owned by
+        // the wall; the repack changed how they average into the visible wall base at 1024.
+        // Kept as an opt-in until that under-floor sliver is fixed on the scene side.
+        if (RaiseBakeryAtlasPadding)
+            ApplyBakeryAtlasPadding(log);
+        else
+            log("padding policy: Bakery between-object atlas padding left untouched (RaiseBakeryAtlasPadding=false).");
 #endif
 
         return result;
     }
+
+    /// <summary>Opt-in: also raise Bakery's between-object atlas packer padding to TargetGutterTexels.</summary>
+    public static bool RaiseBakeryAtlasPadding = false;
 
 #if BAKERY_INCLUDED
     static void ApplyBakeryAtlasPadding(Action<string> log)
