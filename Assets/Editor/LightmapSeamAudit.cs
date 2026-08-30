@@ -116,14 +116,21 @@ public static class LightmapSeamAudit
                     gutter = Math.Min(gutter, RectGap(a, islands[j]));
                 }
 
-                // Nearest other renderer's rect on the same atlas.
+                // Nearest island of any OTHER renderer on the same atlas. Island-level, not the
+                // other renderer's whole lightmapScaleOffset rect: that rect is the object's full
+                // UV [0,1] square, most of which is unused margin, so rect-vs-island distances
+                // over-report adjacency (2026-08-31: the wall's rect "overlapped" the floor's by
+                // 130 texels while their islands were far apart).
                 string neighbour = null;
-                foreach (var other in rects)
+                foreach (var otherPair in islandsByRenderer)
                 {
-                    if (other.r == r || other.lm != lm) continue;
-                    var b = new Island { MinX = other.rect.xMin, MinY = other.rect.yMin, MaxX = other.rect.xMax - 1, MaxY = other.rect.yMax - 1 };
-                    int g = RectGap(a, b);
-                    if (g < gutter) { gutter = g; neighbour = other.r.name; }
+                    var o = otherPair.Key;
+                    if (o == r || o.lightmapIndex != lm) continue;
+                    foreach (var b in otherPair.Value)
+                    {
+                        int g = RectGap(a, b);
+                        if (g < gutter) { gutter = g; neighbour = o.name; }
+                    }
                 }
 
                 if (gutter >= MinGutterTexels)

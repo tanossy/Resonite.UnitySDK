@@ -153,8 +153,10 @@ public static class LightmapPaddingPolicy
             if (changed)
                 dirtyAssets.Add(entry.AssetPath);
 
+            // Raise-only: the effective value is max(previous, required).
+            int effective = Math.Max(previous, entry.RequiredPadding);
             log($"{System.IO.Path.GetFileName(entry.AssetPath)}/{entry.MeshName}: twidth={entry.TexelWidth:0} " +
-                $"padding {previous} -> {entry.RequiredPadding} (target gutter {TargetGutterTexels} texels){(changed ? "" : " [unchanged]")}");
+                $"required {entry.RequiredPadding} for {TargetGutterTexels}-texel gutter, padding {previous} -> {effective}{(changed ? " [reimport]" : " [unchanged]")}");
         }
 
         // 3. Reimport: this is what actually regenerates UV2 (Bakery's ftModelPostProcessor
@@ -185,10 +187,56 @@ public static class LightmapPaddingPolicy
         // Bakery recalculates its own (smaller) value on every bake; with uvPaddingMax it keeps
         // the larger of (existing record, its own) instead of overwriting ours.
         ftBuildGraphics.uvPaddingMax = true;
+
+        // 2026-08-31: second gutter that the per-mesh UV2 padding above does NOT cover - the
+        // empty texels Bakery's atlas packer leaves between different OBJECTS' UV layouts
+        // (BakeryProjectSettings.texelPaddingFor{Default,Xatlas}AtlasPacker, defaults 3 / 1;
+        // ftBuildGraphics reads them via pstorage at pack time). Found by the post-bake
+        // seam audit: after the UV2 fix the remaining findings were all "gutter=0px (next to
+        // Plane001)" - furniture and wall islands packed right against the bright floor, which
+        // is what the faint band along the wall/floor edge was. Same raise-only rule and the
+        // same target, so both gutters survive the send-time downscale equally.
+        ApplyBakeryAtlasPadding(log);
 #endif
 
         return result;
     }
+
+#if BAKERY_INCLUDED
+    static void ApplyBakeryAtlasPadding(Action<string> log)
+    {
+        var settings = ftLightmaps.GetProjectSettings();
+        if (settings == null)
+        {
+            log("padding policy: Bakery project settings not found; atlas packer padding left as is.");
+            return;
+        }
+
+        int before = settings.texelPaddingForDefaultAtlasPacker;
+        int beforeX = settings.texelPaddingForXatlasAtlasPacker;
+        bool changed = false;
+
+        if (settings.texelPaddingForDefaultAtlasPacker < TargetGutterTexels)
+        {
+            settings.texelPaddingForDefaultAtlasPacker = TargetGutterTexels;
+            changed = true;
+        }
+        if (settings.texelPaddingForXatlasAtlasPacker < TargetGutterTexels)
+        {
+            settings.texelPaddingForXatlasAtlasPacker = TargetGutterTexels;
+            changed = true;
+        }
+
+        if (changed)
+        {
+            EditorUtility.SetDirty(settings);
+            AssetDatabase.SaveAssets();
+        }
+
+        log($"Bakery atlas packer padding (between objects): default {before} -> {settings.texelPaddingForDefaultAtlasPacker}, " +
+            $"xatlas {beforeX} -> {settings.texelPaddingForXatlasAtlasPacker} (active packer: {ftBuildGraphics.atlasPacker}){(changed ? "" : " [unchanged]")}");
+    }
+#endif
 
     /// <summary>
     /// Raise-only write of <paramref name="padding"/> for one mesh of one model asset.
@@ -256,13 +304,19 @@ public static class LightmapPaddingPolicy
 
         // Unity Progressive path (and a harmless mirror when Bakery is present): the importer's
         // own margin. Same unit (pixels at a 1024^2 lightmap), same raise-only rule.
+        // 2026-08-31: Unity clamps secondaryUVPackMargin to 64 (Bakery's record goes to 256), so
+        // compare against the clamped value - otherwise every run "raises" 64 -> 149, Unity
+        // clamps it back to 64, and the model gets a pointless synchronous reimport each bake.
+        // When Bakery's record already covers the mesh, the record governs the unwrap
+        // (ftModelPostProcessor) and the importer margin is only a mirror.
+        int importerTarget = Mathf.Min(padding, 64);
         int importerPrevious = Mathf.RoundToInt(importer.secondaryUVPackMargin); // float in Unity's API
         if (previous == 0)
             previous = importerPrevious;
 
-        if (importerPrevious < padding)
+        if (importerPrevious < importerTarget)
         {
-            importer.secondaryUVPackMargin = padding;
+            importer.secondaryUVPackMargin = importerTarget;
             if (importer.secondaryUVMarginMethod != ModelImporterSecondaryUVMarginMethod.Manual)
                 importer.secondaryUVMarginMethod = ModelImporterSecondaryUVMarginMethod.Manual;
             EditorUtility.SetDirty(importer);
