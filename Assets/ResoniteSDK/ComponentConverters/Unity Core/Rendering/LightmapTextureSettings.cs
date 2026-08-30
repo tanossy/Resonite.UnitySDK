@@ -50,16 +50,43 @@ public static class LightmapTextureSettings
     }
 
     /// <summary>
+    /// What ApplyToProvider needs to know about the source texture, captured on the MAIN thread
+    /// (Texture2DConverter.GenerateConversion, next to the other importer-derived fields) and
+    /// consumed later on whatever thread UpdateProvider runs on.
+    ///
+    /// 2026-08-30 live lesson (Editor.log, two aborted sends): the first version of this file
+    /// called AssetDatabase.GetAssetPath(source) and read source.format from inside
+    /// UpdateProvider. That runs on the asset-conversion task continuation, not the main thread,
+    /// so Unity threw "can only be called from the main thread" -> "FATAL ERROR in conversion"
+    /// -> conversion state reset, for every send. Texture2DConverter.GenerateConversion's own
+    /// comment already warns about exactly this ("Unity hates accessing those properties from
+    /// other threads, so we have to fetch it here while we're on the main thread").
+    /// </summary>
+    public struct Capture
+    {
+        public bool IsGeneratedLightmap;
+        public bool IsHdr;
+    }
+
+    /// <summary>Main thread only. <paramref name="assetPath"/> is the already-resolved AssetDatabase path of <paramref name="source"/>.</summary>
+    public static Capture CaptureFrom(UnityEngine.Texture2D source, string assetPath)
+    {
+        return new Capture
+        {
+            IsGeneratedLightmap = source != null && IsGeneratedLightmapAsset(assetPath),
+            IsHdr = source != null && IsHdrFormat(source.format),
+        };
+    }
+
+    /// <summary>
     /// Overrides the provider fields Texture2DConverter derived from the Unity importer with the
     /// lightmap-specific values above. No-op for every texture that isn't a generated lightmap,
-    /// so ordinary albedo/normal/etc. textures are untouched.
+    /// so ordinary albedo/normal/etc. textures are untouched. Thread-agnostic: touches only the
+    /// plain-data provider object and the pre-captured flags, never a UnityEngine.Object.
     /// </summary>
-    public static void ApplyToProvider(UnityEngine.Texture2D source, FrooxEngine.StaticTexture2D data)
+    public static void ApplyToProvider(Capture capture, FrooxEngine.StaticTexture2D data)
     {
-        if (source == null || data == null)
-            return;
-
-        if (!IsGeneratedLightmapAsset(AssetDatabase.GetAssetPath(source)))
+        if (data == null || !capture.IsGeneratedLightmap)
             return;
 
         data.FilterMode = Renderite.Shared.TextureFilterMode.Bilinear;
@@ -71,7 +98,7 @@ public static class LightmapTextureSettings
         data.ForceExactVariant = true;
         data.CrunchCompressed = false;
 
-        if (IsHdrFormat(source.format))
+        if (capture.IsHdr)
         {
             // HDR export path (LightmapDecoder.HdrExport): keep the radiance range, let Resonite
             // block-compress it. Texture2DConverter sets Uncompressed=true for any Unity format

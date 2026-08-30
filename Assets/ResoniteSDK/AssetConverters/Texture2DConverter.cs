@@ -20,6 +20,10 @@ public class Texture2DConverter : AssetConverter<StaticTexture2DWrapper, StaticT
     bool _mipMaps;
     bool _readable;
 
+    // 2026-08-30: baked-lightmap-only settings, captured on the main thread in GenerateConversion
+    // (UpdateProvider runs off-thread - see LightmapTextureSettings.Capture's comment).
+    LightmapTextureSettings.Capture _lightmapSettings;
+
     public override string AssetClass => "Texture2D";
     public override string AssetName => Source.name;
     protected override Message GenerateConversion()
@@ -65,6 +69,8 @@ public class Texture2DConverter : AssetConverter<StaticTexture2DWrapper, StaticT
         else
             _maxSize = null;
 
+        _lightmapSettings = LightmapTextureSettings.CaptureFrom(Source, assetPath);
+
         return ConvertTexture2D(Source, PostProcessor != null);
     }
 
@@ -109,7 +115,7 @@ public class Texture2DConverter : AssetConverter<StaticTexture2DWrapper, StaticT
 
         // 2026-08-30: baked-lightmap-only overrides (BC6H_LZMA/Linear/MinSize/ForceExactVariant,
         // adopted from Lumos) - no-op for every other texture. See LightmapTextureSettings.cs.
-        LightmapTextureSettings.ApplyToProvider(Source, Provider.Data);
+        LightmapTextureSettings.ApplyToProvider(_lightmapSettings, Provider.Data);
 
         return Provider.CollectData(context);
     }
