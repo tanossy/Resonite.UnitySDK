@@ -1218,6 +1218,19 @@ public class SceneConverter : IConversionContext
 
         var scriptPath = System.IO.Path.Combine(EldoradoRepoRoot, "scripts", "build_light_tuning_panel.py");
 
+        // The panel builder is an optional companion script that lives outside this Unity project
+        // (see EldoradoRepoRoot). On any checkout that doesn't have it, Process.Start would throw a
+        // Win32Exception and surface as a red console error on every single send, so skip quietly
+        // instead: everything the panel drives (light intensity, LightmapTint, lossless textures)
+        // has already been baked into the values that were just sent.
+        if (!System.IO.File.Exists(scriptPath))
+        {
+            AppendLightTuningPanelLog(logPath,
+                $"Skipped launch: optional in-world Light Tuning Panel builder not found at {scriptPath}. " +
+                "The scene itself was sent normally; only the in-world tuning panel is skipped.");
+            return;
+        }
+
         var psi = new System.Diagnostics.ProcessStartInfo
         {
             FileName = "uv",
