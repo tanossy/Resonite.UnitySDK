@@ -390,6 +390,15 @@ public class LightmapPipelineWindow : EditorWindow
     const string DebugCleanupHeaderJA = "デバッグ / クリーンアップ";
     const string DebugCleanupHeaderEN = "Debug / Cleanup";
 
+    const string TooltipSendToResoniteJA =
+        "現在のシーンを Resonite へ送信します。送信するパスはツールが選びます。" +
+        "接続が新しい／変換状態が壊れている／シーン構成が前回送信から変わっている場合はシーン全体を、" +
+        "同一セッションで構成が一致していればライトマップのみを送ります。下の行に今回どちらになるかが出ます。";
+    const string TooltipSendToResoniteEN =
+        "Send the current scene to Resonite. The tool picks the pass: the whole scene when the " +
+        "session is new, the conversion state is corrupted, or the scene structure changed since " +
+        "the last successful send; lightmaps only when the session already holds a matching tree. " +
+        "The line below says which one this click would run.";
     const string TooltipSendLightmapsOnlyJA = "ライトマップのみ送信テスト（メッシュ/マテリアルは変更しない）";
     const string TooltipSendLightmapsOnlyEN = "Send only lightmap updates for testing; meshes and materials are left untouched.";
 
@@ -863,18 +872,32 @@ public class LightmapPipelineWindow : EditorWindow
         // connection check here.
         GUI.enabled = !baking;
 
+        // 2026-09-08: "Send Meshes Only" and "Send Materials Only" are gone and the remaining
+        // two buttons go through ResoniteSendPolicy. Partial passes are delta updates that
+        // need a Full send in the SAME session and an uncorrupted converter, neither of which
+        // was visible here - and the panel offered no Full send at all, so the obvious button
+        // to press was always a partial one. Every partial send attempted on 2026-09-08 failed
+        // and corrupted the conversion state, forcing the next Full send to rebuild the tree.
+        // See ResoniteSendPolicy.cs.
+        var sendDecision = ResoniteSendPolicy.Decide();
+
         EditorGUILayout.BeginHorizontal();
 
-        if (GUILayout.Button(new GUIContent(L("メッシュのみ送信", "Send Meshes Only"), L(TooltipSendMeshesOnlyJA, TooltipSendMeshesOnlyEN))))
-            LightmapTestHarness.ConvertMeshesOnly();
+        if (GUILayout.Button(new GUIContent(L("Resonite へ送信", "Send to Resonite"), L(TooltipSendToResoniteJA, TooltipSendToResoniteEN)), GUILayout.Height(24f)))
+            ResoniteSendPolicy.SendToResonite(LightmapTestHarness.LogResult);
 
-        if (GUILayout.Button(new GUIContent(L("マテリアルのみ送信", "Send Materials Only"), L(TooltipSendMaterialsOnlyJA, TooltipSendMaterialsOnlyEN))))
-            LightmapTestHarness.ConvertMaterialsOnly();
-
-        if (GUILayout.Button(new GUIContent(L("ライトマップのみ送信", "Send Lightmaps Only"), L(TooltipSendLightmapsOnlyJA, TooltipSendLightmapsOnlyEN))))
-            LightmapTestHarness.ConvertLightmapsOnly();
+        if (GUILayout.Button(new GUIContent(L("ライトマップのみ送信", "Send Lightmaps Only"), L(TooltipSendLightmapsOnlyJA, TooltipSendLightmapsOnlyEN)), GUILayout.Height(24f)))
+            ResoniteSendPolicy.SendLightmapsOnly(LightmapTestHarness.LogResult);
 
         EditorGUILayout.EndHorizontal();
+
+        // Say up front which pass the main button would run, so the choice is never a surprise.
+        EditorGUILayout.HelpBox(
+            sendDecision.CanSend
+                ? L($"送信すると: {(sendDecision.Chosen == ResoniteSendPolicy.Pass.LightmapsOnly ? "ライトマップのみ" : "シーン全体")} — {sendDecision.Reason}",
+                    $"Would send: {(sendDecision.Chosen == ResoniteSendPolicy.Pass.LightmapsOnly ? "lightmaps only" : "the whole scene")} — {sendDecision.Reason}")
+                : L($"送信できません: {sendDecision.Reason}", $"Cannot send: {sendDecision.Reason}"),
+            sendDecision.CanSend ? MessageType.Info : MessageType.Warning);
 
         if (GUILayout.Button(new GUIContent(L("不足アセットURLを再試行", "Retry Missing Asset URLs"), L(TooltipRetryMissingAssetURLsJA, TooltipRetryMissingAssetURLsEN))))
             LightmapTestHarness.RetryMissingAssetURLs();

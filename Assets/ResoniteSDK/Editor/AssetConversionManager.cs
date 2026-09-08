@@ -257,6 +257,12 @@ public class AssetConversionManager
 
         var identity = new AssetMap<TUnity>(unity, postProcessor);
 
+        // 2026-09-08: same stale-entry guard as GetMaterial below. A converter GameObject can be
+        // destroyed underneath this map (an asset deleted and regenerated, a cleanup pass), and
+        // handing the destroyed component back throws MissingReferenceException mid-send.
+        if (converters.TryGetValue(identity, out var staleConverter) && staleConverter == null)
+            converters.Remove(identity);
+
         if (!converters.TryGetValue(identity, out var converter))
         {
             // There's no active converter for this, so create one
@@ -305,6 +311,17 @@ public class AssetConversionManager
         // Check if there's already conversion and it's bee updated
         if (_cachedMaterials.TryGetValue(material, out var provider))
             return provider;
+
+        // 2026-09-08: the map outlives the converters. ClearGeneratedLightmapVariants() deletes
+        // the Generated/LightmapVariants folder, so a variant Material becomes null and
+        // SceneConverter.UpdateComponentConversions destroys the BakedLightmapStandardConverter
+        // whose Target it was - but the entry here still pointed at that destroyed component,
+        // and the next lookup handed it back. UpdateConversion() then threw
+        // MissingReferenceException and took the whole send down (measured on a re-bake
+        // followed by a lightmaps-only send). A destroyed component compares equal to null
+        // under Unity's operator, so treat that entry as absent and rebuild it.
+        if (_materials.TryGetValue(material, out var staleConverter) && staleConverter == null)
+            _materials.Remove(material);
 
         // Check if there's an active converter
         if (!_materials.TryGetValue(material, out var converter))

@@ -429,6 +429,17 @@ public static class LightmapTestHarness
                     break;
                 }
                 case "convert": Convert(); break;
+                // 2026-09-08: same entry point the panel's "Send to Resonite" button uses, so
+                // the file-driven path and the button cannot drift apart. ResoniteSendPolicy
+                // runs the pre-send hygiene and picks Full vs LightmapsOnly itself.
+                //   send              -> policy picks the pass
+                //   send lightmaps    -> ask for lightmaps only (falls back to Full if unsafe)
+                case "send":
+                    if (parts.Length > 1 && parts[1].ToLowerInvariant().StartsWith("light"))
+                        ResoniteSendPolicy.SendLightmapsOnly(AppendResult);
+                    else
+                        ResoniteSendPolicy.SendToResonite(AppendResult);
+                    break;
                 case "meshes_only": ConvertMeshesOnly(); break;
                 case "materials_only": ConvertMaterialsOnly(); break;
                 case "lightmaps_only": ConvertLightmapsOnly(); break;
@@ -529,6 +540,12 @@ public static class LightmapTestHarness
         parts = filtered.ToArray();
         return found;
     }
+
+    /// <summary>
+    /// Public entry to the Result Log, so other editor tools (ResoniteSendPolicy) can write
+    /// into the same panel log the harness itself uses. 2026-09-08.
+    /// </summary>
+    public static void LogResult(string text) => AppendResult(text);
 
     static void AppendResult(string text)
     {

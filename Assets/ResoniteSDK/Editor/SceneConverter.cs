@@ -419,6 +419,13 @@ public class SceneConverter : IConversionContext
         }
     }
 
+    /// <summary>
+    /// How long to wait for Resonite to answer one data-model batch. Generous on purpose - a
+    /// 3.7 MB / 2470-operation batch was answered in 0.1 s in practice, so anything near this
+    /// limit means the connection is gone rather than the batch being slow.
+    /// </summary>
+    const int BatchTimeoutMilliseconds = 120000;
+
     void SendOperationBatch(List<DataModelOperation> messages)
     {
         if (Link == null || !Link.IsConnected)
@@ -428,7 +435,7 @@ public class SceneConverter : IConversionContext
         // We still want to run the rest of the function, because there can be any asset conversions scheduled
         if (messages.Count > 0)
         {
-            Task.Run(async () =>
+            var batchTask = Task.Run(async () =>
             {
                 // For debugging purposes
                 if(LogMessageJSON)
@@ -447,7 +454,30 @@ public class SceneConverter : IConversionContext
                 foreach (var subResponse in response.Responses)
                     if (!subResponse.Success)
                         throw new InvalidOperationException($"Operation failed for {subResponse.SourceMessageID}: {subResponse.ErrorInfo}");
-            }).GetAwaiter().GetResult();
+            });
+
+            // 2026-09-08: this used to be a bare .GetAwaiter().GetResult(), which parks the
+            // Unity main thread on a task that can never complete. ResoniteLink's
+            // ReceiverHandler stores the socket error in FailureException and disposes the
+            // ClientWebSocket, but it does NOT complete the entries in _pendingResponses -
+            // only LinkInterface.Dispose() does that, and nothing calls it when a connection
+            // dies mid-send. Resonite was restarted during a lightmaps-only send on
+            // 2026-09-08: the socket vanished from netstat, no exception was ever raised, and
+            // the editor sat blocked for over 90 minutes until it had to be killed, losing the
+            // unsaved scene. Asset uploads already had ConversionTimeoutMilliseconds; the batch
+            // send did not. Same asymmetry, far worse consequence.
+            if (!batchTask.Wait(BatchTimeoutMilliseconds))
+            {
+                IsCorrupted = true;
+                throw new TimeoutException(
+                    $"ResoniteLink did not answer a {messages.Count}-operation batch within " +
+                    $"{BatchTimeoutMilliseconds / 1000} seconds. The connection is most likely gone " +
+                    "(a lost socket never completes the pending response on the ResoniteLink side). " +
+                    "Reconnect and send again; the conversion state will be rebuilt.");
+            }
+
+            // Surfaces whatever the task itself threw, unchanged.
+            batchTask.GetAwaiter().GetResult();
         }
 
         _assetConverter.ProcessConversions(Link);

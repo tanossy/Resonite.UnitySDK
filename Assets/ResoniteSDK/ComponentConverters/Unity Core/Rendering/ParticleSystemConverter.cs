@@ -223,6 +223,14 @@ public class ParticleSystemConverter : ResoniteComponentConverter<UnityEngine.Pa
                 : PhotonDust.TextureSheetAnimationType.SingleRow;
         }
 
+        // 2026-09-08: the renderer arm below calls context.GetMaterial(), which schedules a
+        // material + texture upload. MeshRendererConverter guards the same call with
+        // ShouldConvertMaterials; this one did not, so a Meshes Only pass queued a particle
+        // texture upload whose StaticTexture2D component the pass filter had already dropped -
+        // "Component with ID ... not found" on the provider update. Same guard here.
+        if (!ConversionPassState.ShouldConvertMaterials)
+            return;
+
         switch (renderer.renderMode)
         {
             case ParticleSystemRenderMode.Billboard:
@@ -419,5 +427,39 @@ public class ParticleSystemConverter : ResoniteComponentConverter<UnityEngine.Pa
 
         CleanupRenderers();
         CleanupEmitters();
+
+        // 2026-09-08: CleanupRenderers/CleanupEmitters only cover the renderer and emitter
+        // wrappers. The ParticleSystem, ParticleStyle and every module wrapper survived, so
+        // each converter rebuild (ResetConversionState -> CleanupConverters, i.e. every new
+        // ResoniteLink session) left a full set behind and the next Initialize() added another
+        // - 78 components on one particle GameObject were measured. The orphaned ParticleStyle
+        // still referenced a destroyed renderer, that reference went out in the batch, Resonite
+        // answered with an unresolvable-reference failure carrying an id the client had already
+        // retired, and ResoniteLink.dll closed its own socket over it. See PARTHENON-318.
+        //
+        // Reflected over this converter's own ResoniteComponent fields rather than listed by
+        // hand, so a wrapper added later cannot be forgotten here again.
+        DestroyOwnWrappers();
+    }
+
+    /// <summary>Destroys every ResoniteComponent this converter holds a field reference to.</summary>
+    void DestroyOwnWrappers()
+    {
+        var fields = GetType().GetFields(System.Reflection.BindingFlags.Public
+            | System.Reflection.BindingFlags.NonPublic
+            | System.Reflection.BindingFlags.Instance);
+
+        foreach (var field in fields)
+        {
+            if (!typeof(ResoniteComponent).IsAssignableFrom(field.FieldType))
+                continue;
+
+            var wrapper = field.GetValue(this) as ResoniteComponent;
+            if (wrapper == null)
+                continue;
+
+            DestroyImmediate(wrapper);
+            field.SetValue(this, null);
+        }
     }
 }
