@@ -271,6 +271,13 @@ public class SceneConverter : IConversionContext
         // see ConversionMemoryHygiene.cs for the Editor.log evidence behind it.
         ConversionMemoryHygiene.BeforeSend($"before {pass} send");
 
+        // 2026-09-08: measure the bake and servo BakedLightmapStandardConverter.AlbedoGain to a
+        // target surface brightness, instead of shipping a constant that was eyeballed against
+        // one bake of one room. See Editor/LightmapExposurePolicy.cs. Must run before the
+        // material converters read AlbedoGain. Skipped for MeshesOnly, which touches no material.
+        if (pass != ResoniteSdkConversionPass.MeshesOnly)
+            LightmapExposurePolicy.Apply(msg => Debug.Log("[ResoniteSDK] " + msg));
+
         if (pass != ResoniteSdkConversionPass.MeshesOnly && ForceRefreshGeneratedLightmaps)
             LightmapMaterialCache.ClearGeneratedLightmapVariants();
 

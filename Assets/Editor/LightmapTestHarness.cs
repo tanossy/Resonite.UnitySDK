@@ -397,6 +397,37 @@ public static class LightmapTestHarness
                     StartBakeUnity(uqp.UnityLightmapResolution, uqp.UnityDirectSampleCount, uqp.UnityIndirectSampleCount, uqNormalDetail, unityUseCurrentScene);
                     break;
                 case "report": Report(); break;
+                // 2026-09-08: exposure servo controls (Editor/LightmapExposurePolicy.cs).
+                //   exposure                -> measure + report only
+                //   exposure capture        -> adopt the current look as the target
+                //   exposure scale <factor> -> e.g. 0.8 for 20% darker
+                //   exposure on | off       -> enable/disable the servo
+                case "exposure":
+                {
+                    var sub = parts.Length > 1 ? parts[1].ToLowerInvariant() : "";
+                    if (sub == "capture") AppendResult(LightmapExposurePolicy.CaptureReference());
+                    else if (sub == "scale")
+                    {
+                        float factor;
+                        if (parts.Length > 2 && float.TryParse(parts[2], out factor))
+                            AppendResult(LightmapExposurePolicy.ScaleTarget(factor));
+                        else
+                            AppendResult("exposure scale: expected a positive factor, e.g. exposure scale 0.8");
+                    }
+                    else if (sub == "on" || sub == "off")
+                    {
+                        LightmapExposurePolicy.SetEnabled(sub == "on");
+                        AppendResult($"exposure servo {(sub == "on" ? "enabled" : "disabled")} (target {LightmapExposurePolicy.TargetSurfaceLuma:0.####}).");
+                    }
+                    else
+                    {
+                        bool wasEnabled = LightmapExposurePolicy.Enabled;
+                        LightmapExposurePolicy.Enabled = false;
+                        LightmapExposurePolicy.Apply(AppendResult);
+                        LightmapExposurePolicy.Enabled = wasEnabled;
+                    }
+                    break;
+                }
                 case "convert": Convert(); break;
                 case "meshes_only": ConvertMeshesOnly(); break;
                 case "materials_only": ConvertMaterialsOnly(); break;
@@ -830,10 +861,20 @@ public static class LightmapTestHarness
                     // so AddComponent would log a Unity warning and no-op anyway — but we
                     // check explicitly so re-running this on an already-converted scene is
                     // silent and clearly logged instead.
-                    if (light.GetComponent<BakeryDirectLight>() != null)
+                    // 2026-09-08: this used to "skip" an already-converted light, leaving the
+                    // Bakery component holding whatever colour/intensity it was created with.
+                    // Editing the Unity Light afterwards then changed what Resonite renders
+                    // (LightConverter reads the Unity Light) but NOT what Bakery bakes - the two
+                    // drifted apart silently. Re-sync instead of skipping.
+                    var existingDirect = light.GetComponent<BakeryDirectLight>();
+                    if (existingDirect != null)
                     {
+                        bool dirty = existingDirect.color != light.color || !Mathf.Approximately(existingDirect.intensity, light.intensity);
+                        existingDirect.color = light.color;
+                        existingDirect.intensity = light.intensity;
+                        if (dirty) EditorUtility.SetDirty(existingDirect);
                         skippedExisting++;
-                        AppendResult($"Light->Bakery: skip '{light.name}' (BakeryDirectLight already present).");
+                        AppendResult($"Light->Bakery: re-synced '{light.name}' (BakeryDirectLight, color={light.color}, intensity={light.intensity}){(dirty ? " [changed]" : "")}.");
                         continue;
                     }
 
@@ -847,10 +888,18 @@ public static class LightmapTestHarness
 
                 case LightType.Point:
                 {
-                    if (light.GetComponent<BakeryPointLight>() != null)
+                    var existingPoint = light.GetComponent<BakeryPointLight>();
+                    if (existingPoint != null)
                     {
+                        bool dirty = existingPoint.color != light.color
+                            || !Mathf.Approximately(existingPoint.intensity, light.intensity)
+                            || !Mathf.Approximately(existingPoint.cutoff, light.range);
+                        existingPoint.color = light.color;
+                        existingPoint.intensity = light.intensity;
+                        existingPoint.cutoff = light.range;
+                        if (dirty) EditorUtility.SetDirty(existingPoint);
                         skippedExisting++;
-                        AppendResult($"Light->Bakery: skip '{light.name}' (BakeryPointLight already present).");
+                        AppendResult($"Light->Bakery: re-synced '{light.name}' (BakeryPointLight, color={light.color}, intensity={light.intensity}, cutoff={light.range}){(dirty ? " [changed]" : "")}.");
                         continue;
                     }
 
@@ -873,7 +922,7 @@ public static class LightmapTestHarness
             }
         }
 
-        AppendResult($"Light->Bakery conversion summary: {convertedDirect} -> BakeryDirectLight, {convertedPoint} -> BakeryPointLight, {skippedExisting} already-converted, {skippedUnsupported} unsupported type.");
+        AppendResult($"Light->Bakery conversion summary: {convertedDirect} -> BakeryDirectLight, {convertedPoint} -> BakeryPointLight, {skippedExisting} re-synced, {skippedUnsupported} unsupported type.");
 #else
         AppendResult("Light->Bakery conversion skipped: Bakery is not installed in this project (BAKERY_INCLUDED not defined).");
 #endif
@@ -940,6 +989,10 @@ public static class LightmapTestHarness
 
         // 2026-08-30: raise UV2 island padding to the target gutter BEFORE Bakery reads the
         // scene (see LightmapPaddingPolicy.cs — fixes the bright lines along wall corners).
+        // 2026-09-08: per-renderer texel budget (scaleInLightmap) BEFORE the padding policy,
+        // so the gutter is computed against the rectangle Bakery will actually allocate.
+        // See LightmapDensityPolicy.cs - fixes the blocky shading on small props (stools).
+        LightmapDensityPolicy.Apply(texelsPerUnit, AppendResult);
         LightmapPaddingPolicy.Apply(texelsPerUnit, AppendResult);
 
         // ftRenderLightmap.RenderLightmap() is the public entry point used by the
@@ -970,6 +1023,15 @@ public static class LightmapTestHarness
         // Unity公式のMixed/Baked Indirectと同じ考え方)。Convert()側のライト無効化ステップも
         // このタイミングで撤去する。
         instance.userRenderMode = ftRenderLightmap.RenderMode.Indirect;
+
+        // 2026-09-08 (LightmapDensityPolicy): these two must be (re)applied AFTER
+        // RenderLightmap(), which reloads Bakery's settings from ftLightmapsStorage.
+        //   * atlasCountPriority: round auto-atlas resolutions UP. With ClosestPowerOfTwo the
+        //     atlas can be 1.41x too small, the packer overflows, and Bakery's normalization
+        //     then shrinks every rectangle in it (measured 0.36x on stools).
+        //   * maxAutoResolution: the preset's atlas cap, so props can actually get their texels.
+        ftBuildGraphics.atlasCountPriority = true;
+        ftBuildGraphics.maxAutoResolution = LightmapDensityPolicy.AtlasCap;
 
         ForceRTXMode();
 
@@ -1109,6 +1171,7 @@ public static class LightmapTestHarness
 
         // 2026-08-30: same UV2 padding policy as the Bakery path (LightmapPaddingPolicy.cs);
         // Unity's lightmapResolution is its texels-per-unit.
+        LightmapDensityPolicy.Apply(lightmapResolution, AppendResult); // 2026-09-08, same as Bakery path
         LightmapPaddingPolicy.Apply(lightmapResolution, AppendResult);
 
         var settings = AssetDatabase.LoadAssetAtPath<LightingSettings>(UnityLightingSettingsAssetPath);

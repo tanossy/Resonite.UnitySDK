@@ -49,6 +49,7 @@ public static class LightmapPaddingPolicy
         public int RequiredPadding;   // our value (1024-lightmap pixel units)
         public int PreviousPadding;   // Bakery record / importer value before this run (0 = none)
         public bool Changed;
+        public int Gutter;             // bake-texel gutter chosen for this mesh (2026-09-08)
     }
 
     /// <summary>
@@ -109,7 +110,12 @@ public static class LightmapPaddingPolicy
                 continue;
 
             float twidth = Mathf.Sqrt(area) * texelsPerUnit;
-            int padding = Mathf.Clamp(Mathf.CeilToInt(TargetGutterTexels * (1024f / twidth)), 1, MaxPadding);
+            // 2026-09-08 (LightmapDensityPolicy): the wide gutter is only for large, few-island
+            // architecture. Many-island props get Bakery's default 4-texel gutter, otherwise the
+            // margins eat most of the (already small) rectangle — measured 3.4% UV coverage on
+            // the diner stool with the fixed 24-texel gutter.
+            int gutter = LightmapDensityPolicy.GutterFor(mesh, twidth);
+            int padding = Mathf.Clamp(Mathf.CeilToInt(gutter * (1024f / twidth)), 1, MaxPadding);
 
             if (required.TryGetValue(mesh, out var existing))
             {
@@ -117,6 +123,7 @@ public static class LightmapPaddingPolicy
                 {
                     existing.RequiredPadding = padding;
                     existing.TexelWidth = twidth;
+                    existing.Gutter = gutter;
                     required[mesh] = existing;
                 }
             }
@@ -128,6 +135,7 @@ public static class LightmapPaddingPolicy
                     MeshName = mesh.name,
                     TexelWidth = twidth,
                     RequiredPadding = padding,
+                    Gutter = gutter,
                 };
             }
         }
@@ -154,9 +162,9 @@ public static class LightmapPaddingPolicy
                 dirtyAssets.Add(entry.AssetPath);
 
             // Raise-only: the effective value is max(previous, required).
-            int effective = Math.Max(previous, entry.RequiredPadding);
+            int effective = entry.RequiredPadding; // exact-set since 2026-09-08 (was raise-only)
             log($"{System.IO.Path.GetFileName(entry.AssetPath)}/{entry.MeshName}: twidth={entry.TexelWidth:0} " +
-                $"required {entry.RequiredPadding} for {TargetGutterTexels}-texel gutter, padding {previous} -> {effective}{(changed ? " [reimport]" : " [unchanged]")}");
+                $"required {entry.RequiredPadding} (gutter {entry.Gutter} texels), padding {previous} -> {effective}{(changed ? " [reimport]" : " [unchanged]")}");
         }
 
         // 3. Reimport: this is what actually regenerates UV2 (Bakery's ftModelPostProcessor
@@ -186,7 +194,13 @@ public static class LightmapPaddingPolicy
 #if BAKERY_INCLUDED
         // Bakery recalculates its own (smaller) value on every bake; with uvPaddingMax it keeps
         // the larger of (existing record, its own) instead of overwriting ours.
-        ftBuildGraphics.uvPaddingMax = true;
+        // 2026-09-08: our per-mesh value is now exact (props already use Bakery's own 4-texel
+        // gutter, architecture asks for more), so let the record govern instead of max(record, Bakery).
+        ftBuildGraphics.uvPaddingMax = false;
+        // Bakery (ftBuildGraphics ~4562): with PreserveIfExisted it never touches a mesh that
+        // already has a record, so the exact per-mesh padding written above survives the bake.
+        // Meshes without a record still get Bakery's own 4*1024/twidth.
+        ftBuildGraphics.uvPaddingPreserveIfExisted = true;
 
         // 2026-08-31: second gutter that the per-mesh UV2 padding above does NOT cover - the
         // empty texels Bakery's atlas packer leaves between different OBJECTS' UV layouts
@@ -297,7 +311,10 @@ public static class LightmapPaddingPolicy
             else
             {
                 previous = record.padding[meshIndex];
-                if (previous < padding)
+                // 2026-09-08: exact-set instead of raise-only. Bakery's own formula gives small
+                // props a 100-256px margin (4*1024/twidth); with LightmapDensityPolicy raising
+                // their rectangle the correct margin is much smaller and must be allowed to drop.
+                if (previous != padding)
                 {
                     record.padding[meshIndex] = padding;
                     changed = true;
@@ -326,7 +343,7 @@ public static class LightmapPaddingPolicy
         if (previous == 0)
             previous = importerPrevious;
 
-        if (importerPrevious < importerTarget)
+        if (importerPrevious != importerTarget)
         {
             importer.secondaryUVPackMargin = importerTarget;
             if (importer.secondaryUVMarginMethod != ModelImporterSecondaryUVMarginMethod.Manual)
