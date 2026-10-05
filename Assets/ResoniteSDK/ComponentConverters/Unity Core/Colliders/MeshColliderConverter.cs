@@ -33,8 +33,8 @@ public static class MeshColliderHelper
 
 public class MeshColliderConverter : ResoniteComponentConverter<UnityEngine.MeshCollider>
 {
-    public MeshColliderWrapper MeshBinding;
-    public ConvexHullColliderWrapper ConvexHullBinding;
+    public ResRef<MeshCollider> MeshBinding;
+    public ResRef<ConvexHullCollider> ConvexHullBinding;
 
     protected override void UpdateConversion(UnityEngine.MeshCollider target, IConversionContext context)
     {
@@ -46,9 +46,9 @@ public class MeshColliderConverter : ResoniteComponentConverter<UnityEngine.Mesh
                 DestroyImmediate(MeshBinding);
 
             if (ConvexHullBinding == null)
-                ConvexHullBinding = gameObject.AddComponent<ConvexHullColliderWrapper>();
+                ConvexHullBinding = gameObject.AddResoniteComponent<ConvexHullCollider>();
 
-            ConvexHullBinding.Data.SetFrom(target, context);
+            ConvexHullBinding.Binding.SetFrom(target, context);
         }
         else
         {
@@ -56,9 +56,9 @@ public class MeshColliderConverter : ResoniteComponentConverter<UnityEngine.Mesh
                 DestroyImmediate(ConvexHullBinding);
 
             if (MeshBinding == null)
-                MeshBinding = gameObject.AddComponent<MeshColliderWrapper>();
+                MeshBinding = gameObject.AddResoniteComponent<MeshCollider>();
 
-            MeshBinding.Data.SetFrom(target, context);
+            MeshBinding.Binding.SetFrom(target, context);
         }
     }
 

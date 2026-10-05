@@ -121,7 +121,7 @@ public static class PostProcessingSettingsHelper
     }
 }
 
-public class PostProcessingConverter : ResoniteSingleComponentConverter<PostProcessVolume, FrooxEngine.PostProcessingSettingsWrapper>
+public class PostProcessingConverter : ResoniteSingleComponentConverter<PostProcessVolume, FrooxEngine.PostProcessingSettings>
 {
     // Tracks which Global volume "won" the first-wins policy for this editor session. Unity's
     // overloaded `== null` check correctly detects destroyed volumes (e.g. after switching
@@ -152,6 +152,6 @@ public class PostProcessingConverter : ResoniteSingleComponentConverter<PostProc
 
         s_claimedGlobalVolume = target;
 
-        Binding.Data.SetFrom(target, context);
+        Binding.SetFrom(target, context);
     }
 }

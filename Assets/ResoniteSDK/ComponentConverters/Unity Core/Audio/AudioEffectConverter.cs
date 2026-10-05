@@ -243,7 +243,7 @@ public static class AudioEffectHelper
 
 public class AudioEffectConverter : ResoniteComponentConverter<AudioReverbFilter>
 {
-    public AudioZitaReverbWrapper Reverb;
+    public ResRef<FrooxEngine.AudioZitaReverb> Reverb;
 
     protected override void UpdateConversion(AudioReverbFilter target, IConversionContext context)
     {
@@ -269,19 +269,19 @@ public class AudioEffectConverter : ResoniteComponentConverter<AudioReverbFilter
         // list and get converted first within the same conversion pass. If it hasn't happened yet
         // (e.g. unusual component ordering), skip for now; UpdateConversion runs again on every
         // subsequent conversion pass, so this will pick it up as soon as it's available.
-        var output = GetComponent<AudioOutputWrapper>();
+        var output = gameObject.GetResoniteComponent<FrooxEngine.AudioOutput>();
 
         if (output == null)
         {
             Debug.LogWarning(
-                $"AudioReverbFilter on '{target.gameObject.name}': no AudioOutputWrapper found " +
+                $"AudioReverbFilter on '{target.gameObject.name}': no converted AudioOutput found " +
                 $"yet (sibling AudioSource not converted yet?) - will retry on next conversion " +
                 $"pass.");
             return;
         }
 
         if (Reverb == null)
-            Reverb = gameObject.AddComponent<AudioZitaReverbWrapper>();
+            Reverb = gameObject.AddResoniteComponent<FrooxEngine.AudioZitaReverb>();
 
         // UNVERIFIED (see file header): AudioZitaReverb is simply added to the same Slot as the
         // AudioOutput, with no explicit reference wiring it to that AudioOutput - AudioDSP_Effect
@@ -290,7 +290,7 @@ public class AudioEffectConverter : ResoniteComponentConverter<AudioReverbFilter
         // reverb zone setup) has not been confirmed against a running client.
         var unityEcho = GetComponent<UnityEngine.AudioEchoFilter>();
 
-        Reverb.Data.SetFrom(target, unityEcho);
+        Reverb.Binding.SetFrom(target, unityEcho);
     }
 
     // 2026-08-27: guarded on ExplicitCleanupRequested (see ResoniteComponentConverter.cs) so
@@ -302,6 +302,6 @@ public class AudioEffectConverter : ResoniteComponentConverter<AudioReverbFilter
             return;
 
         if (Reverb != null)
-            DestroyImmediate(Reverb);
+            DestroyImmediate(Reverb.Container);
     }
 }

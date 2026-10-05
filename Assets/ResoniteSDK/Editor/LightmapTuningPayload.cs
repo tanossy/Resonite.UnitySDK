@@ -53,10 +53,10 @@ public static class LightmapTuningPayload
 
         foreach (var mat in Object.FindObjectsOfType<BakedLightmapStandardConverter>())
         {
-            if (mat == null || mat.PBS == null || mat.PBS.Data == null)
+            if (mat == null || mat.PBS == null || mat.PBS.Binding == null)
                 continue;
 
-            var data = mat.PBS.Data;
+            var data = mat.PBS.Binding;
             var c = data.AlbedoColor.color;
 
             bool white = Mathf.Abs(c.r - gain.r) <= WhiteTolerance * gain.r &&
@@ -76,13 +76,13 @@ public static class LightmapTuningPayload
 
         foreach (var tex in Object.FindObjectsOfType<Texture2DConverter>())
         {
-            if (tex == null || tex.Source == null || tex.Provider == null || tex.Provider.Data == null)
+            if (tex == null || tex.Source == null || tex.Provider == null || tex.Provider.Binding == null)
                 continue;
 
             if (!LightmapTextureSettings.IsGeneratedLightmapAsset(AssetDatabase.GetAssetPath(tex.Source)))
                 continue;
 
-            var id = TryGetId(converter, tex.Provider.Data.PreferredFormat_Element.Member);
+            var id = TryGetId(converter, tex.Provider.Binding.PreferredFormat_Element.Member);
             if (!string.IsNullOrEmpty(id))
                 formatTargets.Add(id);
         }

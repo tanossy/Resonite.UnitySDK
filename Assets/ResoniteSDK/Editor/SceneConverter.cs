@@ -399,8 +399,13 @@ public class SceneConverter : IConversionContext
 
             // Post processing
             foreach (var root in roots)
+            {
                 foreach (var postprocessor in root.GetComponentsInChildren<IConversionPostProcessor>())
                     postprocessor.PostProcessConversion(this);
+
+                // Postprocess all components as well
+                PostProcessComponentsRecursively(root, new List<ResoniteComponent>());
+            }
         }
         catch (Exception ex)
         {
@@ -410,7 +415,7 @@ public class SceneConverter : IConversionContext
                 $"TECHNICAL INFO:\n{ex}");
 
             // Stop realtime mode if it's active
-            if(IsRealtimeModeActive)
+            if (IsRealtimeModeActive)
                 StopRealtimeMode();
 
             // This conversion is now in corrupted state, we can't continue.
@@ -426,6 +431,23 @@ public class SceneConverter : IConversionContext
     /// </summary>
     const int BatchTimeoutMilliseconds = 120000;
 
+    // Explicit method to allow sharing the same list, but avoid excessive allocations
+    // Most components will not have any post processing, so we want to avoid building a huge list
+    // of them, using a bunch of memory
+    void PostProcessComponentsRecursively(Transform root, List<ResoniteComponent> cacheList = null)
+    {
+        root.GetComponents(cacheList);
+
+        foreach (var component in cacheList)
+            if (component.Data is IComponentConversionPostProcessor postprocessor)
+                postprocessor.PostProcessConversion(component, this);
+
+        cacheList.Clear();
+
+        for (int i = 0; i < root.childCount; i++)
+            PostProcessComponentsRecursively(root.GetChild(i), cacheList);
+    }
+
     void SendOperationBatch(List<DataModelOperation> messages)
     {
         if (Link == null || !Link.IsConnected)
@@ -438,7 +460,7 @@ public class SceneConverter : IConversionContext
             var batchTask = Task.Run(async () =>
             {
                 // For debugging purposes
-                if(LogMessageJSON)
+                if (LogMessageJSON)
                 {
                     var operations = new DataModelOperationBatch();
                     operations.Operations = messages.ToList<Message>();
@@ -875,22 +897,25 @@ public class SceneConverter : IConversionContext
     {
         switch (ActiveConversionPass)
         {
+            // Upstream v1.1.2 replaced the per-type generated wrapper MonoBehaviours with one
+            // non-generic ResoniteComponent container, so the component's identity now lives in
+            // its .Data rather than in the container's own C# type.
             case ResoniteSdkConversionPass.MeshesOnly:
-                return component is FrooxEngine.MeshRendererWrapper ||
-                    component is FrooxEngine.SkinnedMeshRendererWrapper ||
-                    component is FrooxEngine.MeshColliderWrapper ||
-                    component is FrooxEngine.ConvexHullColliderWrapper ||
+                return component.Data is FrooxEngine.MeshRenderer ||
+                    component.Data is FrooxEngine.SkinnedMeshRenderer ||
+                    component.Data is FrooxEngine.MeshCollider ||
+                    component.Data is FrooxEngine.ConvexHullCollider ||
                     component.GetComponent<MeshConverter>() != null;
 
             case ResoniteSdkConversionPass.MaterialsOnly:
-                return component is FrooxEngine.MeshRendererWrapper ||
-                    component is FrooxEngine.SkinnedMeshRendererWrapper ||
+                return component.Data is FrooxEngine.MeshRenderer ||
+                    component.Data is FrooxEngine.SkinnedMeshRenderer ||
                     component.GetComponent<ResoniteMaterialConverter>() != null ||
                     component.GetComponent<Texture2DConverter>() != null ||
                     component.GetComponent<CubemapConverter>() != null;
 
             case ResoniteSdkConversionPass.LightmapsOnly:
-                return component is FrooxEngine.MeshRendererWrapper ||
+                return component.Data is FrooxEngine.MeshRenderer ||
                     component.GetComponent<BakedLightmapStandardConverter>() != null ||
                     IsGeneratedLightmapTextureConverter(component.GetComponent<Texture2DConverter>());
 
@@ -1156,7 +1181,7 @@ public class SceneConverter : IConversionContext
         try
         {
             var lights = UnityEngine.Object.FindObjectsOfType<LightConverter>()
-                .Where(c => c != null && c.Target != null && c.Binding != null && c.Binding.Data != null)
+                .Where(c => c != null && c.Target != null && c.Binding != null)
                 .ToList();
 
             var payload = new LightTuningPanelInputPayload { Port = _window.Port };
@@ -1180,7 +1205,7 @@ public class SceneConverter : IConversionContext
                 // this same Convert() call, so these already include LightTuning.ApplyIntensity/
                 // ApplyColor - i.e. they match exactly what was just sent to Resonite for this
                 // light, not the raw pre-tuning Unity values).
-                var data = lc.Binding.Data;
+                var data = lc.Binding;
                 var c = data.Color.color;
 
                 var pos = lc.transform.position;

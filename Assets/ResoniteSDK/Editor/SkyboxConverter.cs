@@ -1,6 +1,8 @@
+using Elements.Core;
 using System;
 using System.Linq;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 
 [Serializable]
@@ -10,18 +12,19 @@ public class SkyboxConverter
 
     public GameObject SkyboxRoot;
 
-    public FrooxEngine.SkyboxWrapper Skybox;
-    [NonSerialized]
-    public FrooxEngine.AmbientLightSH2Wrapper AmbientLight;
-    public FrooxEngine.ReflectionProbeWrapper ReflectionProbe;
-    [NonSerialized]
-    public FrooxEngine.ReflectionProbeSH2Wrapper ReflectionProbeSH2;
-    [NonSerialized]
-    public FrooxEngine.ValueCopySH_L2_Wrapper ValueCopy;
+    public ResRef<FrooxEngine.Skybox> Skybox;
+    public ResRef<FrooxEngine.AmbientLightSH2> AmbientLight;
+    public ResRef<FrooxEngine.ReflectionProbe> ReflectionProbe;
+    public ResRef<FrooxEngine.ReflectionProbeSH2> ReflectionProbeSH2;
+    public ResRef<FrooxEngine.ValueCopySH_L2> ValueCopy;
 
-    // Unity cannot serialize the generated Resonite wrapper fields that contain
-    // Sync<UnityEngine.Rendering.SphericalHarmonicsL2>. Keep SH2 sky ambient disabled for the
-    // current baked-lightmap verification path; the skybox material/probe can still be converted.
+    // Originally disabled because Unity could not serialize the generated wrapper components that
+    // held Sync<UnityEngine.Rendering.SphericalHarmonicsL2>, and the [NonSerialized] workaround on
+    // those fields went with them. Upstream v1.1.2 replaced the wrappers with ResRef<T> containers
+    // and fixed their serialization, so that specific blocker is gone - but SH2 sky ambient has
+    // not been re-verified on the live client against the new architecture, and the baked-lightmap
+    // path doesn't need it, so it stays off until someone checks it. The skybox material and the
+    // reflection probe are still converted either way.
     public static bool ConvertSphericalHarmonics = false;
 
     public void EnsureRoot()
@@ -29,20 +32,23 @@ public class SkyboxConverter
         if (SkyboxRoot != null)
             return;
 
-        // 2026-07-27 bug fix (discovered on the live client): when Skybox/AmbientLight/
-        // ReflectionProbe are in Unity's "fake null" state (the native side has been destroyed
-        // but the C# reference itself is not null), `?.` (C#'s null-conditional operator) doesn't
-        // go through Unity's operator== overload, so the `.gameObject` access throws a
+        // Try to get the root from the current components if they exist.
+        //
+        // 2026-07-27 bug fix (discovered on the live client), kept through the v1.1.2 merge: when
+        // a container is in Unity's "fake null" state (the native side has been destroyed but the
+        // C# reference itself is not null), `?.` (C#'s null-conditional operator) doesn't go
+        // through Unity's operator== overload, so the `.gameObject` access throws a
         // MissingReferenceException. Confirmed to occur, for example, when
-        // CleanupAssetConversionRoots() destroys __UnitySkybox entirely and this field then gets
-        // restored via a domain reload. Doing an explicit Unity-aware `!= null` check on each
-        // field safely skips over destroyed references.
-        if (Skybox != null)
-            SkyboxRoot = Skybox.gameObject;
-        else if (AmbientLight != null)
-            SkyboxRoot = AmbientLight.gameObject;
-        else if (ReflectionProbe != null)
-            SkyboxRoot = ReflectionProbe.gameObject;
+        // CleanupAssetConversionRoots() destroys __UnitySkybox entirely and these fields then get
+        // restored via a domain reload. Upstream's one-liner here is
+        // `Skybox.Container?.gameObject ?? ...`, which reintroduces exactly that crash, so the
+        // explicit Unity-aware `!= null` checks are kept - now against the ResRef containers.
+        if (Skybox.Container != null)
+            SkyboxRoot = Skybox.Container.gameObject;
+        else if (AmbientLight.Container != null)
+            SkyboxRoot = AmbientLight.Container.gameObject;
+        else if (ReflectionProbe.Container != null)
+            SkyboxRoot = ReflectionProbe.Container.gameObject;
 
         if(SkyboxRoot == null)
         {
@@ -78,60 +84,62 @@ public class SkyboxConverter
 
         // Setup the skybox material itself
         var skyboxMaterial = context.GetMaterial(RenderSettings.skybox);
-        Skybox.Data.Material = skyboxMaterial;
+        Skybox.Binding.Material = skyboxMaterial;
 
         // Setup reflection probe for the skybox
         // This is used for specular reflections and also to auto-calculate the SH2
-        ReflectionProbe.Data.SkyboxOnly = true;
-        ReflectionProbe.Data.BoxSize = Vector3.one * 1000000;
-        ReflectionProbe.Data.ClearFlags = Renderite.Shared.ReflectionProbeClear.Skybox;
-        ReflectionProbe.Data.HDR = true;
-        ReflectionProbe.Data.ProbeType = Renderite.Shared.ReflectionProbeType.OnChanges;
-        ReflectionProbe.Data.Intensity = 1f;
+        ReflectionProbe.Binding.SkyboxOnly = true;
+        ReflectionProbe.Binding.BoxSize = Vector3.one * 1000000;
+        ReflectionProbe.Binding.ClearFlags = Renderite.Shared.ReflectionProbeClear.Skybox;
+        ReflectionProbe.Binding.HDR = true;
+        ReflectionProbe.Binding.ProbeType = Renderite.Shared.ReflectionProbeType.OnChanges;
+        ReflectionProbe.Binding.Intensity = 1f;
 
-        while (ReflectionProbe.Data.ChangesSources.Count < 2)
-            ReflectionProbe.Data.ChangesSources.Add();
+        while (ReflectionProbe.Binding.ChangesSources.Count < 2)
+            ReflectionProbe.Binding.ChangesSources.Add();
 
-        ReflectionProbe.Data.ChangesSources[0] = Skybox.Data;
-        ReflectionProbe.Data.ChangesSources[1] = skyboxMaterial;
+        ReflectionProbe.Binding.ChangesSources[0] = Skybox.Binding;
+        ReflectionProbe.Binding.ChangesSources[1] = skyboxMaterial;
 
         if (!ConvertSphericalHarmonics)
             return;
 
         // Assign the reflection probe as source for SH2 computation
-        ReflectionProbeSH2.Data.Probe = ReflectionProbe.Data;
+        ReflectionProbeSH2.Binding.Probe = ReflectionProbe.Binding;
+
         // This should make it look roughly the same as Unity's own calculation
-        ReflectionProbeSH2.Data.Order0Scale = 1.5f;
-        ReflectionProbeSH2.Data.Order1Scale = 0.5f;
-        ReflectionProbeSH2.Data.Order2Scale = 0.5f;
+        ReflectionProbeSH2.Binding.Order0Scale = 1.5f;
+        ReflectionProbeSH2.Binding.Order1Scale = 0.5f;
+        ReflectionProbeSH2.Binding.Order2Scale = 0.5f;
 
         // Copy the value from the SH2 to AmbientLight
-        ValueCopy.Data.Source = ReflectionProbeSH2.Data.AmbientLight_Element.Member;
-        ValueCopy.Data.Target = AmbientLight.Data.AmbientLight_Element.Member;
+        ValueCopy.Binding.Source = ReflectionProbeSH2.Binding.AmbientLight_Element.Member;
+        ValueCopy.Binding.Target = AmbientLight.Binding.AmbientLight_Element.Member;
     }
 
-    void EnsureComponent<T>(ref T component)
-        where T : ResoniteComponent
+    void EnsureComponent<T>(ref ResRef<T> component)
+        where T : ResoniteObject, FrooxEngine.IWorldElement, new()
     {
         if (component != null)
             return;
 
-        component = SkyboxRoot.GetComponent<T>();
+        component = SkyboxRoot.GetResoniteComponent<T>();
 
         if (component == null)
-            component = SkyboxRoot.AddComponent<T>();
+            component = SkyboxRoot.AddResoniteComponent<T>();
     }
 
-    void RemoveComponent<T>(ref T component)
-        where T : ResoniteComponent
+    // ResRef is a struct, so "absent" is `default` (a null Container), not a null reference.
+    void RemoveComponent<T>(ref ResRef<T> component)
+        where T : ResoniteObject, FrooxEngine.IWorldElement, new()
     {
         if (component == null && SkyboxRoot != null)
-            component = SkyboxRoot.GetComponent<T>();
+            component = SkyboxRoot.GetResoniteComponent<T>();
 
         if (component == null)
             return;
 
-        UnityEngine.Object.DestroyImmediate(component);
-        component = null;
+        UnityEngine.Object.DestroyImmediate(component.Container);
+        component = default;
     }
 }

@@ -89,14 +89,14 @@ public class BakedLightmapStandardConverter : ResoniteMaterialConverter
     // room with different bake brightness or a different ambient setup.
     public static Color AlbedoGain = new Color(2.71f, 2.45f, 2.23f, 1f);
 
-    public PBS_MultiUV_MetallicWrapper PBS;
+    public ResRef<FrooxEngine.PBS_MultiUV_Metallic> PBS;
 
     public override IAssetProvider<FrooxEngine.Material> UpdateConversion(UnityEngine.Material material, IConversionContext context)
     {
         if (PBS == null)
-            PBS = gameObject.AddComponent<PBS_MultiUV_MetallicWrapper>();
+            PBS = gameObject.AddResoniteComponent<FrooxEngine.PBS_MultiUV_Metallic>();
 
-        var data = PBS.Data;
+        var data = PBS.Binding;
 
         data.RenderQueue = material.renderQueue;
 
@@ -207,6 +207,6 @@ public class BakedLightmapStandardConverter : ResoniteMaterialConverter
         var fill = Mathf.Clamp01(AdditiveFillStrength);
         data.SecondaryEmissiveColor = new Color(fill, fill, fill, 1f).ToColorX_sRGB();
 
-        return PBS.Data;
+        return PBS.Binding;
     }
 }
